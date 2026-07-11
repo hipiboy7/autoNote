@@ -1,0 +1,4 @@
+telegram-mcp/
+data/state.json
+data/extracted_messages.json
+data/formatted_outputs/
