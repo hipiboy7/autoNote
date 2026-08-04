@@ -1,0 +1,16 @@
+[project]
+name = "writer"
+version = "0.1.0"
+description = "Research report writer service to write contents into Google Docs"
+dependencies = [
+    "pydantic>=2.7.0",
+    "google-docs-client",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"

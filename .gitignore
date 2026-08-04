@@ -1,4 +1,43 @@
+# --- 자격증명 (절대 커밋 금지) ---
+# 실값이 담긴 .env 는 커밋하지 않고, 키 목록은 sample.env 로만 관리한다 (gemini.md 그라운드 룰 6)
+.env
+.env.*
+!sample.env
+!.env.example
+*.session
+*.session-journal
+*.pem
+*.key
+*.p12
+*.pfx
+*.credentials
+*.token
+
+# --- 외부 벤더 클론 (Telethon 세션·자격증명 포함) ---
 telegram-mcp/
+
+# --- 런타임 상태 파일 ---
 data/state.json
+data/state.json.bak
 data/extracted_messages.json
 data/formatted_outputs/
+data/batch.lock
+
+# --- 캐시 / 빌드 산출물 ---
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+venv/
+.venv/
+
+# --- 에이전트 로컬 설정 ---
+.claude/settings.local.json
+.claude/settings.local.json.tmp.*
+
+# --- 일회성 작업 스크립트 ---
+scratch/

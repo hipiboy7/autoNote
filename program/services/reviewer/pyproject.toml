@@ -1,0 +1,17 @@
+[project]
+name = "reviewer"
+version = "0.1.0"
+description = "Weekly review generation service to summarize insights in Google Docs"
+dependencies = [
+    "pydantic>=2.7.0",
+    "google-docs-client",
+    "llm-gateway",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"

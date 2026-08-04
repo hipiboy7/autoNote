@@ -1,0 +1,16 @@
+[project]
+name = "merger"
+version = "0.1.0"
+description = "Comment merger service to update thoughts from thought note to main docs"
+dependencies = [
+    "pydantic>=2.7.0",
+    "google-docs-client",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"

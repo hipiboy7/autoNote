@@ -1,0 +1,16 @@
+[project]
+name = "collector"
+version = "0.1.0"
+description = "Research message collector service"
+dependencies = [
+    "pydantic>=2.7.0",
+    "telegram-client",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
