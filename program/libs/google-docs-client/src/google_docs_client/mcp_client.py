@@ -1,8 +1,9 @@
 import os
+import re
 import sys
 import json
 import subprocess
-from typing import List, Optional
+from typing import Any, List, Optional
 from .interface import GoogleDocsClient
 
 class MCPGoogleDocsClient(GoogleDocsClient):
@@ -151,39 +152,154 @@ class MCPGoogleDocsClient(GoogleDocsClient):
             print(f"[MCPGoogleDocsClient] read_text failed: {e}", file=sys.stderr)
             return ""
 
-    def overwrite_text(self, doc_id: str, text: str) -> bool:
-        """문서 전체 내용을 새 텍스트로 교체하거나 추가한다."""
+    def replace_line(self, doc_id: str, find_text: str, replace_text: str) -> bool:
+        """한 줄(문단)을 정확히 찾아 치환하고, 실제 치환 여부를 읽기 검증으로 확인한다.
+
+        docs.replaceText 응답에는 치환 건수가 실려 오지 않으므로, 치환 후 본문을 다시
+        읽어 대상 문자열이 사라지고 새 문자열이 존재하는지 확인한다.
+        확인되지 않으면 False 를 반환한다 — 조용한 성공은 사용자 기록 유실로 이어진다.
+        """
+        if not find_text:
+            return False
         try:
-            # 1. 현재 문서 전체 텍스트를 조회
-            current_text = self.read_text(doc_id)
-            lines = [line for line in current_text.split("\n") if line.strip() and not line.startswith("Document Title:")]
-            clean_text = "\n".join(lines).strip()
-
-            if not clean_text:
-                # 본문이 비어있으면 단순 추가로 작성
-                return self.append_text(doc_id, text)
-
-            # 2. replaceText를 사용해 기존 내용을 새 내용으로 교체
             params = {
                 "name": "docs.replaceText",
                 "arguments": {
                     "documentId": doc_id,
-                    "findText": clean_text,
-                    "replaceText": text
+                    "findText": find_text,
+                    "replaceText": replace_text,
                 }
             }
             result = self._send_request("tools/call", params)
 
-            # 3. 응답 검증 — 에러 키워드 포함 시 append_text 폴백
-            result_text = str(result)
-            if any(kw in result_text.lower() for kw in ["error", "invalid"]):
-                print(f"[MCPGoogleDocsClient] overwrite_text replaceText failed, falling back to append_text: {result_text[:200]}", file=sys.stderr)
-                return self.append_text(doc_id, text)
+            result_text = str(result).lower()
+            if any(kw in result_text for kw in ["error", "invalid"]):
+                print(
+                    f"[MCPGoogleDocsClient] replace_line 실패 응답: {str(result)[:300]}",
+                    file=sys.stderr,
+                )
+                return False
 
+            # 읽기 검증: 치환이 실제로 반영되었는지 확인
+            after = self.read_text(doc_id)
+            if find_text in after:
+                print(
+                    f"[MCPGoogleDocsClient] replace_line 검증 실패: 대상 문자열이 그대로 남아 있습니다 "
+                    f"(doc={doc_id})",
+                    file=sys.stderr,
+                )
+                return False
+            if replace_text and replace_text not in after:
+                print(
+                    f"[MCPGoogleDocsClient] replace_line 검증 실패: 새 문자열이 문서에 없습니다 "
+                    f"(doc={doc_id})",
+                    file=sys.stderr,
+                )
+                return False
             return True
         except Exception as e:
-            print(f"[MCPGoogleDocsClient] overwrite_text fallback to append_text: {e}", file=sys.stderr)
-            return self.append_text(doc_id, text)
+            print(f"[MCPGoogleDocsClient] replace_line 예외: {e}", file=sys.stderr)
+            return False
+
+    def overwrite_text(self, doc_id: str, text: str) -> bool:
+        """문서 전체 내용을 새 텍스트로 교체한다.
+
+        Google Docs replaceAllText 는 한 문단 내부에서만 일치하므로 여러 줄에 걸친
+        본문 전체를 한 번에 치환할 수 없다. 이 메서드는 문서가 비어 있을 때만
+        의미 있게 동작하며, 그 외에는 False 를 반환한다.
+        여러 줄 정밀 치환이 필요하면 replace_line() 을 사용한다.
+        """
+        try:
+            current_text = self.read_text(doc_id)
+            body_lines = [
+                line for line in current_text.split("\n")
+                if line.strip() and not line.startswith("Document Title:")
+            ]
+
+            if not body_lines:
+                # 본문이 비어있으면 단순 추가로 작성
+                return self.append_text(doc_id, text)
+
+            if len(body_lines) == 1:
+                # 단일 문단이면 replaceText 로 정확히 교체 가능
+                return self.replace_line(doc_id, body_lines[0], text)
+
+            print(
+                "[MCPGoogleDocsClient] overwrite_text 는 여러 문단 문서를 치환할 수 없습니다 "
+                f"(doc={doc_id}, 문단 {len(body_lines)}개). replace_line 또는 append_text 를 사용하십시오.",
+                file=sys.stderr,
+            )
+            return False
+        except Exception as e:
+            print(f"[MCPGoogleDocsClient] overwrite_text 예외: {e}", file=sys.stderr)
+            return False
+
+    @staticmethod
+    def _extract_doc_id(result: Any) -> str:
+        """MCP 응답에서 생성된 문서 ID를 추출한다 (응답 스키마 변동에 방어적으로 대응)."""
+        candidates: List[Any] = [result]
+
+        content = result.get("content") if isinstance(result, dict) else None
+        if isinstance(content, list) and content:
+            first = content[0]
+            text = first.get("text") if isinstance(first, dict) else first
+            if isinstance(text, str) and text:
+                try:
+                    candidates.append(json.loads(text))
+                except json.JSONDecodeError:
+                    url_match = re.search(r"/document/d/([A-Za-z0-9_-]{20,})", text)
+                    if url_match:
+                        return url_match.group(1)
+
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            for key in ("documentId", "id", "fileId", "docId"):
+                value = candidate.get(key)
+                if isinstance(value, str) and value:
+                    return value
+        return ""
+
+    def create_doc(self, title: str, content: str = "", folder_id: str = "") -> str:
+        """docs.create 로 새 문서를 만들고, 필요하면 지정 Drive 폴더로 이동한다."""
+        try:
+            arguments: dict = {"title": title}
+            if content:
+                arguments["content"] = content
+            result = self._send_request(
+                "tools/call", {"name": "docs.create", "arguments": arguments}
+            )
+            doc_id = self._extract_doc_id(result)
+            if not doc_id:
+                print(
+                    f"[MCPGoogleDocsClient] create_doc 응답에서 문서 ID를 찾지 못했습니다: "
+                    f"{str(result)[:300]}",
+                    file=sys.stderr,
+                )
+                return ""
+
+            if folder_id:
+                try:
+                    self._send_request(
+                        "tools/call",
+                        {
+                            "name": "drive.moveFile",
+                            "arguments": {"fileId": doc_id, "folderId": folder_id},
+                        },
+                    )
+                except Exception as e:
+                    # 문서 자체는 생성됐으므로 이동 실패는 경고로만 처리한다
+                    print(
+                        f"[MCPGoogleDocsClient] 문서 {doc_id} 를 폴더 {folder_id} 로 "
+                        f"이동하지 못했습니다: {e}",
+                        file=sys.stderr,
+                    )
+
+            print(f"[MCPGoogleDocsClient] 문서 생성 완료: '{title}' (id={doc_id})")
+            return doc_id
+        except Exception as e:
+            print(f"[MCPGoogleDocsClient] create_doc 실패: {e}", file=sys.stderr)
+            return ""
 
     def apply_sepia_theme(self, doc_id: str) -> bool:
         """

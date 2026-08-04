@@ -9,9 +9,13 @@ class MockGoogleDocsClient(GoogleDocsClient):
     def __init__(self, doc_contents: dict[str, str] = None):
         self.doc_contents = doc_contents or {}
         self.overwrite_log = {}
+        self.append_log = []
         self.sepia_applied = []
 
     def append_text(self, doc_id: str, text: str) -> bool:
+        # 실제 Docs 처럼 문서 맨 아래에 덧붙인다 (누적 동작 검증을 위해 필요)
+        self.doc_contents[doc_id] = self.doc_contents.get(doc_id, "") + text
+        self.append_log.append(doc_id)
         return True
 
     def read_text(self, doc_id: str) -> str:
@@ -21,6 +25,18 @@ class MockGoogleDocsClient(GoogleDocsClient):
         self.doc_contents[doc_id] = text
         self.overwrite_log[doc_id] = text
         return True
+
+    def replace_line(self, doc_id: str, find_text: str, replace_text: str) -> bool:
+        current = self.doc_contents.get(doc_id, "")
+        if not find_text or "\n" in find_text or find_text not in current:
+            return False
+        self.doc_contents[doc_id] = current.replace(find_text, replace_text)
+        return True
+
+    def create_doc(self, title: str, content: str = "", folder_id: str = "") -> str:
+        doc_id = f"created::{title}"
+        self.doc_contents[doc_id] = content
+        return doc_id
 
     def apply_sepia_theme(self, doc_id: str) -> bool:
         self.sepia_applied.append(doc_id)
@@ -135,6 +151,60 @@ def test_weekly_reviewer_generates_and_saves_review():
     updated_review = client.read_text(review_doc_id)
     assert "주간 리서치 성찰 요약서" in updated_review
     assert "o4-mini" in client.sepia_applied or review_doc_id in client.sepia_applied
+
+def test_weekly_review_accumulates_and_preserves_past_reviews():
+    """AGENTS.md: 40_리뷰 는 단일 통합 문서에 누적(append)한다.
+
+    덮어쓰면 지난주 리뷰가 사라져 관점 변화 추적이 불가능해진다.
+    """
+    theme_doc_id = "theme_10"
+    theme_content = (
+        "━━━━━━━━━━━━━━━━━━\n"
+        "■ [t310] 2026-07-15 | 삼성전자 HBM 실적 전망\n"
+        "▶ 핵심 주장: 퀄 테스트 통과에 따른 이익 급증\n"
+        "▶ 근거·데이터:\n  - HBM3E 12단 공급\n"
+        "▶ 판단 논리: 공급 부족 지속\n"
+        "▶ 리스크·반대 시나리오:\n  - 중국 수요 둔화\n"
+        "▶ 💭 내 생각: 단기 매수 기회 판단\n"
+        "▶ ❓ 생각해볼 질문: 다변화 가능 여부?\n"
+    )
+
+    review_doc_id = "review_doc"
+    previous_review = (
+        "━━━━━━━━━━━━━━━━━━\n"
+        "■ 2026-07-11 주간리뷰 성찰 보고서 (2026-W28)\n"
+        "지난주에 기록된 소중한 리뷰 본문\n"
+    )
+
+    client = MockGoogleDocsClient({
+        theme_doc_id: theme_content,
+        review_doc_id: previous_review,
+    })
+    gateway = MockLLMGateway(response_text="## 이번 주 핵심 논리\n**첫째**, 공급 부족.\n---\n끝.")
+
+    reviewer = WeeklyReviewer(
+        docs_client=client,
+        llm_gateway=gateway,
+        doc_mappings={"반도체사이클": theme_doc_id},
+        model_name="o4-mini",
+        base_url="https://api.openai.com/v1",
+        api_key="mock-key",
+    )
+
+    assert reviewer.generate_weekly_review(review_doc_id, datetime(2026, 7, 18, 12, 0, 0)) is True
+
+    final = client.read_text(review_doc_id)
+    # 1. 지난주 리뷰가 보존되어야 한다
+    assert "지난주에 기록된 소중한 리뷰 본문" in final
+    # 2. 이번 주 리뷰가 아래에 덧붙어야 한다
+    assert "이번 주 핵심 논리" in final
+    assert final.index("지난주에 기록된") < final.index("이번 주 핵심 논리")
+    # 3. 덮어쓰기는 호출되지 않아야 한다
+    assert client.overwrite_log == {}
+    # 4. 마크다운 기호가 본문에 노출되지 않아야 한다
+    assert "##" not in final
+    assert "**" not in final
+
 
 def test_weekly_reviewer_skips_when_no_recent_records():
     # 최근 7일 내의 메시지가 아예 존재하지 않는 경우

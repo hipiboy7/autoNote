@@ -120,18 +120,77 @@ def test_mcp_client_read_text(mock_popen):
     assert "doc-123" in written_data
 
 @patch("subprocess.Popen")
-def test_mcp_client_overwrite_text(mock_popen):
+def test_mcp_client_overwrite_text_single_paragraph(mock_popen):
+    """본문이 한 문단이면 replaceText 로 정확히 교체할 수 있다."""
     mock_proc = MagicMock()
     mock_popen.return_value = mock_proc
     mock_proc.stdout.readline.side_effect = [
-        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}), # init ok
-        json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"text": "Existing Content"}}), # read_text ok
-        json.dumps({"jsonrpc": "2.0", "id": 3, "result": {"success": True}}) # replaceText ok
+        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}),                              # init
+        json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"text": "Existing Content"}}),     # read_text
+        json.dumps({"jsonrpc": "2.0", "id": 3, "result": {"success": True}}),                # replaceText
+        json.dumps({"jsonrpc": "2.0", "id": 4, "result": {"text": "New overwrite content"}}) # 검증 read_text
     ]
-    
+
     client = MCPGoogleDocsClient(mcp_cmd=["mock-node"])
     res = client.overwrite_text("doc-123", "New overwrite content")
-    
+
     assert res is True
+
+
+@patch("subprocess.Popen")
+def test_mcp_client_overwrite_text_refuses_multi_paragraph(mock_popen, capsys):
+    """replaceAllText 는 문단 경계를 넘지 못하므로 여러 문단 문서는 치환할 수 없다.
+
+    과거에는 이 경우에도 True 를 반환해 '조용한 성공'으로 위장됐다.
+    """
+    mock_proc = MagicMock()
+    mock_popen.return_value = mock_proc
+    mock_proc.stdout.readline.side_effect = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}),
+        json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"text": "첫째 줄\n둘째 줄\n셋째 줄"}}),
+    ]
+
+    client = MCPGoogleDocsClient(mcp_cmd=["mock-node"])
+    res = client.overwrite_text("doc-123", "새 본문")
+
+    assert res is False
+    assert "여러 문단 문서를 치환할 수 없습니다" in capsys.readouterr().err
+
+
+@patch("subprocess.Popen")
+def test_mcp_client_replace_line_verifies_result(mock_popen):
+    mock_proc = MagicMock()
+    mock_popen.return_value = mock_proc
+    mock_proc.stdout.readline.side_effect = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}),                    # init
+        json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"success": True}}),     # replaceText
+        json.dumps({"jsonrpc": "2.0", "id": 3, "result": {"text": "▶ 💭 내 생각: 반영된 의견"}}),
+    ]
+
+    client = MCPGoogleDocsClient(mcp_cmd=["mock-node"])
+    res = client.replace_line("doc-123", "▶ 💭 내 생각: 미기록 [r755]", "▶ 💭 내 생각: 반영된 의견")
+
+    assert res is True
+    written = "".join([call.args[0] for call in mock_proc.stdin.write.call_args_list])
+    assert "docs.replaceText" in written
+
+
+@patch("subprocess.Popen")
+def test_mcp_client_replace_line_returns_false_when_target_remains(mock_popen, capsys):
+    """치환이 반영되지 않았는데 성공으로 보고하면 사용자 생각이 유실된다."""
+    mock_proc = MagicMock()
+    mock_popen.return_value = mock_proc
+    mock_proc.stdout.readline.side_effect = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}),
+        json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"success": True}}),
+        # 치환 대상이 그대로 남아 있음 (실제로는 아무것도 바뀌지 않았다)
+        json.dumps({"jsonrpc": "2.0", "id": 3, "result": {"text": "▶ 💭 내 생각: 미기록 [r755]"}}),
+    ]
+
+    client = MCPGoogleDocsClient(mcp_cmd=["mock-node"])
+    res = client.replace_line("doc-123", "▶ 💭 내 생각: 미기록 [r755]", "▶ 💭 내 생각: 반영된 의견")
+
+    assert res is False
+    assert "대상 문자열이 그대로 남아 있습니다" in capsys.readouterr().err
 
 

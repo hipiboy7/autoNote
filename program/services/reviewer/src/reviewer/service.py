@@ -1,8 +1,28 @@
+import re
 import sys
 from datetime import datetime
 from google_docs_client import GoogleDocsClient
 from llm_gateway import LLMGateway
 from .parser import WeeklyReviewParser, ParsedRecord
+
+# 마크다운 기호를 Docs 본문에 그대로 노출시키지 않는다 (AGENTS.md 서식 규칙).
+_MD_HEADING = re.compile(r"^\s{0,3}#{1,6}\s*")
+_MD_BOLD = re.compile(r"\*\*(.+?)\*\*")
+_MD_ITALIC = re.compile(r"(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)")
+_MD_HR = re.compile(r"^\s*([-*_])\1{2,}\s*$")
+
+
+def strip_markdown(text: str) -> str:
+    """LLM 응답의 마크다운 기호를 제거해 Docs 에 평문으로 기록한다."""
+    lines = []
+    for line in text.split("\n"):
+        if _MD_HR.match(line):
+            continue
+        line = _MD_HEADING.sub("", line)
+        line = _MD_BOLD.sub(r"\1", line)
+        line = _MD_ITALIC.sub(r"\1", line)
+        lines.append(line.rstrip())
+    return "\n".join(lines)
 
 class WeeklyReviewer:
     def __init__(
@@ -46,7 +66,7 @@ class WeeklyReviewer:
                 f"■ {base_date.strftime('%Y-%m-%d')} 주간리뷰 성찰 보고서\n"
                 "▶ 안내: 이번 주 수집된 신규 리서치가 없어 주간리뷰를 생성하지 않습니다.\n"
             )
-            self.docs_client.overwrite_text(review_doc_id, skip_text)
+            self.docs_client.append_text(review_doc_id, skip_text)
             self.docs_client.apply_sepia_theme(review_doc_id)
             return True
 
@@ -108,8 +128,16 @@ class WeeklyReviewer:
             print(f"[WeeklyReviewer] LLM generation failed: {e}", file=sys.stderr)
             return False
 
-        # 5. 구글 Docs에 덮어쓰기 기록 및 세피아 배경 테마 인가
-        write_ok = self.docs_client.overwrite_text(review_doc_id, review_content)
+        # 5. 단일 통합 문서 맨 아래에 누적(append) 기록 후 세피아 배경 테마 인가.
+        #    덮어쓰면 지난주 리뷰가 사라져 '관점 변화 추적'이라는 주간리뷰의 목적이 무너진다
+        #    (AGENTS.md: 40_리뷰 는 누적 관리).
+        review_block = (
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"■ {base_date.strftime('%Y-%m-%d')} 주간리뷰 성찰 보고서"
+            f" ({base_date.strftime('%G-W%V')})\n"
+            f"{strip_markdown(review_content).strip()}\n"
+        )
+        write_ok = self.docs_client.append_text(review_doc_id, review_block)
         theme_ok = self.docs_client.apply_sepia_theme(review_doc_id)
 
         return write_ok and theme_ok

@@ -14,6 +14,8 @@ class State(BaseModel):
     last_run: datetime
     channels: Dict[str, ChannelState] = Field(default_factory=dict)
     last_weekly_review_week: Optional[str] = None
+    # 자동 생성된 월별 원문보관 문서 매핑 (YYYY-MM -> Google Docs ID)
+    original_docs: Dict[str, str] = Field(default_factory=dict)
 
 class StateManager:
     def __init__(self, file_path: str):
@@ -78,6 +80,12 @@ class StateManager:
     def update_weekly_review_week(self, week_str: str) -> None:
         state = self.load_state()
         state.last_weekly_review_week = week_str
+        self.save_state(state)
+
+    def register_original_doc(self, month: str, doc_id: str) -> None:
+        """자동 생성한 월별 원문보관 문서를 상태 파일에 등록한다."""
+        state = self.load_state()
+        state.original_docs[month] = doc_id
         self.save_state(state)
 
 class MessageCollector:

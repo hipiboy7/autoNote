@@ -16,6 +16,9 @@ class MockGoogleDocsClient(GoogleDocsClient):
         self.write_log[doc_id].append(text)
         return True
 
+    def create_doc(self, title: str, content: str = "", folder_id: str = "") -> str:
+        return f"created::{title}"
+
     def apply_sepia_theme(self, doc_id: str) -> bool:
         self.sepia_applied.append(doc_id)
         return True
@@ -24,6 +27,9 @@ class MockGoogleDocsClient(GoogleDocsClient):
         return ""
 
     def overwrite_text(self, doc_id: str, text: str) -> bool:
+        return True
+
+    def replace_line(self, doc_id: str, find_text: str, replace_text: str) -> bool:
         return True
 
     def batch_update(self, doc_id: str, requests: list) -> bool:

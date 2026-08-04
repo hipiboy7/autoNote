@@ -44,7 +44,10 @@ class ResearchWriter:
             f"▶ 근거·데이터:\n{evidence_str}\n"
             f"▶ 판단 논리: {report.logic.strip()}\n"
             f"▶ 리스크·반대 시나리오:\n{risks_str}\n"
-            "▶ 💭 내 생각: 미기록\n"
+            # 식별자를 붙여 문서 내에서 유일한 문단으로 만든다.
+            # Google Docs replaceAllText 는 한 문단 단위로만 일치하므로, 식별자가 없으면
+            # 여러 블록의 '미기록' 줄이 구별되지 않아 생각 병합을 정밀하게 할 수 없다.
+            f"▶ 💭 내 생각: 미기록 [{prefix}{msg.id}]\n"
             f"▶ ❓ 생각해볼 질문: {report.critical_question.strip()}\n"
         )
 

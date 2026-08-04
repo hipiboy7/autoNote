@@ -72,7 +72,7 @@ def test_main_runs_full_batch_pipeline(mock_pipeline_services):
         merger=merger,
         reviewer=reviewer,
         thought_doc_id="thought_doc",
-        original_doc_id="orig_doc",
+        original_doc_resolver=lambda msg_date: "orig_doc",
         doc_mappings=doc_mappings,
         channel_id="-1004421517798",
         base_date=base_date
@@ -122,7 +122,7 @@ def test_main_partial_state_update_on_failure(mock_pipeline_services):
             merger=merger,
             reviewer=reviewer,
             thought_doc_id="thought_doc",
-            original_doc_id="orig_doc",
+            original_doc_resolver=lambda msg_date: "orig_doc",
             doc_mappings=doc_mappings,
             channel_id="-1004421517798",
             base_date=base_date
@@ -132,6 +132,12 @@ def test_main_partial_state_update_on_failure(mock_pipeline_services):
 
     # 101번은 리서치가 아니므로 통과했고, last_success_id가 101로 업데이트되어 안전 세이브가 호출되었는지 검증
     state_manager.update_channel_state.assert_called_with("-1004421517798", 101)
+
+    # 분석이 실패한 102번은 원문조차 기록되지 않아야 한다.
+    # 원문을 먼저 쓰면 state 가 101 에 머문 채 배치가 중단되어 다음 실행에서 중복 기록된다.
+    assert writer.write_original_backup.call_count == 1
+    written_ids = [call.args[1].id for call in writer.write_original_backup.call_args_list]
+    assert written_ids == [101]
 
 def test_cli_argument_parsing():
     # 파라미터 분기 검증

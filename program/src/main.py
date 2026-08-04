@@ -4,7 +4,7 @@ import argparse
 import atexit
 import msvcrt
 from datetime import datetime
-from typing import Dict
+from typing import Callable, Dict
 
 # 라이브러리 및 서비스 모듈 import
 from telegram_client.mcp_client import MCPTelegramClient
@@ -17,6 +17,8 @@ from analyzer.config import LLMSettings
 from writer.service import ResearchWriter
 from merger.service import CommentMerger
 from reviewer.service import WeeklyReviewer
+
+from original_docs import OriginalDocRegistry, parse_monthly_mapping
 
 def parse_args():
     parser = argparse.ArgumentParser(description="autoNote 투자 리서치 하이브리드 배치 CLI")
@@ -95,7 +97,12 @@ def release_batch_lock(lock_path: str):
         pass
 
 def resolve_original_doc(msg_date: datetime, original_doc_mappings: Dict[str, str], fallback_doc_id: str) -> str:
-    """메시지 날짜 기반으로 올바른 월별 원문보관 문서 ID를 반환한다."""
+    """월별 원문보관 문서 ID를 반환한다 (매핑 dict 만 사용하는 단순 조회).
+
+    미등록 월에 대해 fallback 으로 넘어가면 엉뚱한 달의 문서에 기록되므로,
+    배치 경로에서는 OriginalDocRegistry 를 사용한다. 이 함수는 매핑이 이미
+    확정된 경우에만 쓴다.
+    """
     month_key = msg_date.strftime("%Y-%m")
     return original_doc_mappings.get(month_key, fallback_doc_id)
 
@@ -106,8 +113,7 @@ def run_batch(
     merger: CommentMerger,
     reviewer: WeeklyReviewer,
     thought_doc_id: str,
-    original_doc_id: str,
-    original_doc_mappings: Dict[str, str],
+    original_doc_resolver: Callable[[datetime], str],
     doc_mappings: Dict[str, str],
     channel_id: str,
     base_date: datetime
@@ -140,7 +146,8 @@ def run_batch(
             report = analyzer.analyze_message(msg.text) if is_res else None
 
             # 4. 원문 무조건 보관 (제목은 첫 30자 요약)
-            target_original_doc = resolve_original_doc(msg.date, original_doc_mappings, original_doc_id)
+            #    월별 문서가 없으면 자동 생성된다. 확보 실패 시 예외로 중단한다.
+            target_original_doc = original_doc_resolver(msg.date)
             writer.write_original_backup(target_original_doc, msg, title=title)
 
             target_doc_id = None
@@ -200,8 +207,7 @@ def run_backfill(
     analyzer: ResearchAnalyzer,
     writer: ResearchWriter,
     thought_doc_id: str,
-    original_doc_id: str,
-    original_doc_mappings: Dict[str, str],
+    original_doc_resolver: Callable[[datetime], str],
     doc_mappings: Dict[str, str],
     channel_id: str,
     from_id: int,
@@ -226,8 +232,8 @@ def run_backfill(
             is_res = collector.is_research(msg)
             report = analyzer.analyze_message(msg.text) if is_res else None
 
-            # 월별 원문보관 문서 라우팅
-            target_original_doc = resolve_original_doc(msg.date, original_doc_mappings, original_doc_id)
+            # 월별 원문보관 문서 라우팅 (없으면 자동 생성)
+            target_original_doc = original_doc_resolver(msg.date)
             writer.write_original_backup(target_original_doc, msg, title=title)
 
             target_doc_name = "원문보관"
@@ -299,11 +305,14 @@ def main():
         "review": os.getenv("REVIEW_DOC_ID", "1ZMxc48JJgrlCmkKmE9SgRH3doRu4yasG3oymyvWDFHs"),
     }
 
-    # 월별 원문보관 문서 매핑 (YYYY-MM → Google Docs ID)
+    # 월별 원문보관 문서 매핑 (YYYY-MM → Google Docs ID).
+    # ORIGINAL_DOC_MONTHLY 로 주입하고, 기존 운영 문서는 하위 호환을 위해 기본값으로 유지한다.
+    # 미등록 월은 OriginalDocRegistry 가 문서를 새로 만들어 state.json 에 등록한다.
     original_doc_mappings = {
         "2026-07": original_doc_id,
         "2026-08": os.getenv("ORIGINAL_DOC_08_ID", "1gfyz-nJZ5vtcH8enwnxcGgjjpZ6Smoqj0RvVDix5BMI"),
     }
+    original_doc_mappings.update(parse_monthly_mapping(os.getenv("ORIGINAL_DOC_MONTHLY")))
 
     # 2. 서비스 인스턴스화
     state_manager = StateManager(state_file)
@@ -316,7 +325,14 @@ def main():
     docs_client = MCPGoogleDocsClient()
     writer = ResearchWriter(docs_client)
     merger = CommentMerger(docs_client, doc_mappings)
-    
+
+    original_doc_registry = OriginalDocRegistry(
+        docs_client=docs_client,
+        state_manager=state_manager,
+        configured=original_doc_mappings,
+        drive_folder_id=os.getenv("DRIVE_PARENT_FOLDER_ID", ""),
+    )
+
     reviewer = WeeklyReviewer(
         docs_client=docs_client,
         llm_gateway=llm_gateway,
@@ -337,8 +353,7 @@ def main():
             merger=merger,
             reviewer=reviewer,
             thought_doc_id=thought_doc_id,
-            original_doc_id=original_doc_id,
-            original_doc_mappings=original_doc_mappings,
+            original_doc_resolver=original_doc_registry.resolve,
             doc_mappings=doc_mappings,
             channel_id=args.channel,
             base_date=now
@@ -362,8 +377,7 @@ def main():
             analyzer=analyzer,
             writer=writer,
             thought_doc_id=thought_doc_id,
-            original_doc_id=original_doc_id,
-            original_doc_mappings=original_doc_mappings,
+            original_doc_resolver=original_doc_registry.resolve,
             doc_mappings=doc_mappings,
             channel_id=args.channel,
             from_id=args.from_id,
