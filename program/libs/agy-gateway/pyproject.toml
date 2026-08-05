@@ -1,0 +1,14 @@
+[project]
+name = "agy-gateway"
+version = "0.1.0"
+description = "Antigravity (agy) CLI worker gateway with schema-enforced structured output"
+dependencies = [
+    "pydantic>=2.7.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

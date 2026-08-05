@@ -7,39 +7,52 @@ from datetime import datetime
 from typing import Callable, Dict
 
 # 라이브러리 및 서비스 모듈 import
+from agy_gateway import AgyCliRunner
 from telegram_client.mcp_client import MCPTelegramClient
-from llm_gateway.openai_gateway import OpenAILikeGateway
 from google_docs_client.mcp_client import MCPGoogleDocsClient
 
 from collector.service import MessageCollector, StateManager
-from analyzer.service import ResearchAnalyzer
-from analyzer.config import LLMSettings
+from collector.triage import REASON_NO_BODY, ResearchTriage
+from analyzer.service import THEMES, ResearchAnalyzer
 from writer.service import ResearchWriter
 from merger.service import CommentMerger
 from reviewer.service import WeeklyReviewer
 
 from original_docs import OriginalDocRegistry, parse_monthly_mapping
+from repair_docs import DocRepairer
+from worker_roster import load_roster
 
 def parse_args():
     parser = argparse.ArgumentParser(description="autoNote 투자 리서치 하이브리드 배치 CLI")
     parser.add_argument(
-        "--model", 
-        type=str, 
-        default=os.getenv("CHAT_LLM_MODEL", "Gemini 3.5 Flash (Medium)"),
-        help="사용할 LLM 모델명 지정"
+        "--model",
+        type=str,
+        default=os.getenv("AGY_REVIEW_MODEL", ""),
+        help="주간리뷰 워커 모델 재지정 (agy models 기준, 미지정 시 로스터 기본값)"
     )
     parser.add_argument(
-        "--channel", 
-        type=str, 
-        default="-1004421517798",
+        "--channel",
+        type=str,
+        default=os.getenv("TELEGRAM_CHANNEL_ID", "-1004421517798"),
         help="수집할 텔레그램 채널 ID"
     )
     parser.add_argument(
         "--mode", 
         type=str, 
-        choices=["batch", "merge", "review", "status", "backfill"], 
+        choices=["batch", "merge", "review", "status", "backfill", "repair"],
         default="batch",
         help="배치 실행 모드 지정"
+    )
+    parser.add_argument(
+        "--doc",
+        type=str,
+        default=None,
+        help="복구 대상 문서 키 (repair 모드 전용, 예: 반도체사이클). all 이면 전체"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="repair 모드에서 오염 블록만 집계하고 문서를 만들지 않는다"
     )
     parser.add_argument(
         "--from-id",
@@ -106,8 +119,42 @@ def resolve_original_doc(msg_date: datetime, original_doc_mappings: Dict[str, st
     month_key = msg_date.strftime("%Y-%m")
     return original_doc_mappings.get(month_key, fallback_doc_id)
 
+def run_weekly_review_if_due(
+    collector: MessageCollector,
+    reviewer: WeeklyReviewer,
+    doc_mappings: Dict[str, str],
+    base_date: datetime,
+) -> bool:
+    """그 주(ISO Week)의 첫 배치라면 지난주 주간리뷰를 생성한다.
+
+    신규 메시지가 없는 날에도 실행되어야 한다. 과거에는 '신규 없음' 조기 반환 뒤에
+    리뷰 단계가 놓여 있어, 조용한 월요일에는 주간리뷰가 아예 생성되지 않았다.
+    """
+    current_iso_week = base_date.strftime("%G-W%V")
+    state = collector.state_manager.load_state()
+    if state.last_weekly_review_week == current_iso_week:
+        return False
+
+    review_doc_id = doc_mappings.get("review")
+    if not review_doc_id:
+        print("[Batch] 리뷰 문서 매핑이 없어 주간리뷰를 건너뜁니다.", file=sys.stderr)
+        return False
+
+    print(
+        f"[Batch] First batch of week {current_iso_week} — generating weekly review..."
+    )
+    if reviewer.generate_weekly_review(review_doc_id, base_date):
+        collector.state_manager.update_weekly_review_week(current_iso_week)
+        return True
+
+    # 실패 시 주차를 기록하지 않아 다음 실행에서 재시도된다
+    print("[Batch] 주간리뷰 생성 실패 — 다음 배치에서 재시도합니다.", file=sys.stderr)
+    return False
+
+
 def run_batch(
     collector: MessageCollector,
+    triage: ResearchTriage,
     analyzer: ResearchAnalyzer,
     writer: ResearchWriter,
     merger: CommentMerger,
@@ -118,8 +165,12 @@ def run_batch(
     channel_id: str,
     base_date: datetime
 ) -> bool:
-    """일일 배치 전체 파이프라인 오케스트레이션"""
-    
+    """일일 배치 전체 파이프라인 오케스트레이션.
+
+    LLM 호출은 '판별(triage)' 과 '추출(extract)' 두 단계에서 **배치로만** 일어난다.
+    호출 1건당 input 약 20.7k 토큰이 고정 오버헤드이므로 건별 호출은 낭비다.
+    """
+
     # 1. 생각노트 역동기화 병합 (어제 작성한 의견 동기화)
     print("[Batch] Step 1: Merging yesterday's thoughts...")
     merger.merge_thoughts(thought_doc_id)
@@ -129,7 +180,28 @@ def run_batch(
     new_messages = collector.collect_new_messages(channel_id)
     if not new_messages:
         print("[Batch] No new messages to process.")
+        run_weekly_review_if_due(collector, reviewer, doc_mappings, base_date)
         return True
+
+    # 3. 리서치 여부 판별 (프로그램 확정 + triage 워커 배치)
+    print(f"[Batch] Step 3: Triaging {len(new_messages)} messages...")
+    decisions = triage.classify(new_messages)
+    research_ids = [m.id for m in new_messages if decisions[m.id].is_research]
+    no_body_ids = {
+        m.id for m in new_messages
+        if decisions[m.id].reason == REASON_NO_BODY
+    }
+    print(
+        f"[Batch] Triage: research={len(research_ids)}, "
+        f"skipped={len(new_messages) - len(research_ids)} "
+        f"(본문 없음 {len(no_body_ids)}건)"
+    )
+
+    # 4. 리서치 글을 배치로 분석. 실패하면 아무것도 기록하지 않고 중단한다.
+    print(f"[Batch] Step 4: Extracting logic from {len(research_ids)} research posts...")
+    reports = analyzer.analyze_batch(
+        [(m.id, m.text) for m in new_messages if m.id in set(research_ids)]
+    )
 
     success_count = 0
     skipped_count = 0
@@ -137,39 +209,45 @@ def run_batch(
 
     for msg in new_messages:
         try:
+            # 본문이 없는 미디어 전용 메시지는 보관할 원문이 없으므로 건너뛴다.
+            if msg.id in no_body_ids:
+                skipped_count += 1
+                last_success_id = msg.id
+                continue
+
             title = msg.text.split("\n")[0][:30].strip() or "제목 없음"
+            report = reports.get(msg.id)
 
-            # 3. 리서치 분석을 Docs 기록보다 먼저 수행한다.
-            #    LLM 실패 시 아무것도 기록하지 않은 상태로 중단해야 한다. 원문을 먼저 쓰면
-            #    state.json 이 갱신되지 않은 채 배치가 중단되어 다음 실행에서 원문이 중복 기록된다.
-            is_res = collector.is_research(msg)
-            report = analyzer.analyze_message(msg.text) if is_res else None
-
-            # 4. 원문 무조건 보관 (제목은 첫 30자 요약)
-            #    월별 문서가 없으면 자동 생성된다. 확보 실패 시 예외로 중단한다.
+            # 5. 원문 보관 (월별 문서가 없으면 자동 생성, 확보 실패 시 예외로 중단)
             target_original_doc = original_doc_resolver(msg.date)
             writer.write_original_backup(target_original_doc, msg, title=title)
 
-            target_doc_id = None
             target_doc_name = "원문보관"
             link_doc_id = target_original_doc
 
             if report is not None:
-                # LLM이 분류한 테마명으로 대상 문서 조회 (매칭 실패 시 반도체사이클 폴백)
-                target_doc_id = doc_mappings.get(report.theme) or doc_mappings.get("반도체사이클")
-                if target_doc_id:
-                    writer.write_research_report(target_doc_id, msg, report, prefix="r", title=title)
-                    target_doc_name = report.theme
-                    link_doc_id = target_doc_id
+                # 테마는 enum 으로 강제되므로 매핑이 반드시 존재한다.
+                # 조용한 폴백은 오분류를 쌓기 때문에 두지 않는다.
+                target_doc_id = doc_mappings.get(report.theme)
+                if not target_doc_id:
+                    raise KeyError(
+                        f"테마 {report.theme!r} 에 대응하는 문서 매핑이 없습니다. "
+                        "doc_mappings 를 확인하십시오."
+                    )
+                writer.write_research_report(
+                    target_doc_id, msg, report, prefix="r", title=title
+                )
+                target_doc_name = report.theme
+                link_doc_id = target_doc_id
                 success_count += 1
             else:
                 skipped_count += 1
 
-            # 5. 생각노트 Pre-fill 생성 (모든 원문에 대해서 적용)
+            # 6. 생각노트 Pre-fill 생성
             writer.pre_fill_thought_note(
-                thought_doc_id, 
-                msg, 
-                prefix="r", 
+                thought_doc_id,
+                msg,
+                prefix="r",
                 title=title,
                 target_doc_name=target_doc_name,
                 target_doc_id=link_doc_id
@@ -180,22 +258,19 @@ def run_batch(
 
         except Exception as e:
             # 배치 중단 시 직전 성공 ID까지 안전 세이브하여 중복/유실 차단
-            print(f"[Batch] Error during pipeline execution at message {msg.id}: {e}", file=sys.stderr)
+            print(
+                f"[Batch] Error during pipeline execution at message {msg.id}: "
+                f"{str(e)[:400]}",
+                file=sys.stderr,
+            )
             if last_success_id:
                 collector.state_manager.update_channel_state(channel_id, last_success_id)
             raise e
 
-    # 6. 주말이 지나고 그 주(ISO Week)에 처음으로 배치가 실행될 때 지난주 주간리뷰 자동 실행
-    current_iso_week = base_date.strftime("%G-W%V")
-    state = collector.state_manager.load_state()
-    if state.last_weekly_review_week != current_iso_week:
-        print(f"[Batch] Step 6: First batch execution of week {current_iso_week}. Triggering weekly review generation...")
-        review_doc_id = doc_mappings.get("review")
-        if review_doc_id:
-            reviewer.generate_weekly_review(review_doc_id, base_date)
-            collector.state_manager.update_weekly_review_week(current_iso_week)
+    # 7. 그 주(ISO Week) 첫 배치라면 지난주 주간리뷰 생성
+    run_weekly_review_if_due(collector, reviewer, doc_mappings, base_date)
 
-    # 7. 전체 성공 시 상태 최종 업데이트
+    # 8. 전체 성공 시 상태 최종 업데이트
     if last_success_id:
         collector.state_manager.update_channel_state(channel_id, last_success_id)
 
@@ -204,6 +279,7 @@ def run_batch(
 
 def run_backfill(
     collector: MessageCollector,
+    triage: ResearchTriage,
     analyzer: ResearchAnalyzer,
     writer: ResearchWriter,
     thought_doc_id: str,
@@ -214,23 +290,33 @@ def run_backfill(
     to_id: int,
 ) -> bool:
     """누락된 메시지 구간을 백필하는 파이프라인. state.json을 갱신하지 않는다."""
-    
+
     print(f"[Backfill] Collecting messages in range [{from_id}, {to_id}]...")
     messages = collector.collect_message_range(channel_id, from_id, to_id)
     if not messages:
         print("[Backfill] No messages found in the specified range.")
         return True
 
+    decisions = triage.classify(messages)
+    research_ids = {m.id for m in messages if decisions[m.id].is_research}
+    no_body_ids = {
+        m.id for m in messages if decisions[m.id].reason == REASON_NO_BODY
+    }
+    reports = analyzer.analyze_batch(
+        [(m.id, m.text) for m in messages if m.id in research_ids]
+    )
+
     success_count = 0
     skipped_count = 0
 
     for msg in messages:
         try:
-            title = msg.text.split("\n")[0][:30].strip() or "제목 없음"
+            if msg.id in no_body_ids:
+                skipped_count += 1
+                continue
 
-            # 분석을 Docs 기록보다 먼저 수행한다 (LLM 실패 시 원문 중복 기록 방지).
-            is_res = collector.is_research(msg)
-            report = analyzer.analyze_message(msg.text) if is_res else None
+            title = msg.text.split("\n")[0][:30].strip() or "제목 없음"
+            report = reports.get(msg.id)
 
             # 월별 원문보관 문서 라우팅 (없으면 자동 생성)
             target_original_doc = original_doc_resolver(msg.date)
@@ -240,11 +326,14 @@ def run_backfill(
             link_doc_id = target_original_doc
 
             if report is not None:
-                target_doc_id = doc_mappings.get(report.theme) or doc_mappings.get("반도체사이클")
-                if target_doc_id:
-                    writer.write_research_report(target_doc_id, msg, report, prefix="r", title=title)
-                    target_doc_name = report.theme
-                    link_doc_id = target_doc_id
+                target_doc_id = doc_mappings.get(report.theme)
+                if not target_doc_id:
+                    raise KeyError(f"테마 {report.theme!r} 문서 매핑 없음")
+                writer.write_research_report(
+                    target_doc_id, msg, report, prefix="r", title=title
+                )
+                target_doc_name = report.theme
+                link_doc_id = target_doc_id
                 success_count += 1
             else:
                 skipped_count += 1
@@ -266,21 +355,30 @@ def run_backfill(
     print(f"[Backfill] Completed. Processed={success_count}, Skipped={skipped_count}")
     return True
 
+def verify_theme_mappings(doc_mappings: Dict[str, str]) -> None:
+    """모든 테마에 문서 매핑이 있는지 시작 시 검증한다 (프로그램 책임).
+
+    테마가 enum 으로 강제되므로 라우팅 실패는 설정 오류다. 배치 중간에 발견하는 대신
+    기동 시점에 즉시 실패시켜, 조용한 폴백으로 오분류가 쌓이는 것을 막는다.
+    """
+    missing = [theme for theme in THEMES if not doc_mappings.get(theme)]
+    if missing:
+        print(
+            f"[Config] 문서 매핑이 없는 테마: {missing}. "
+            "analyzer.THEMES 와 doc_mappings 를 일치시키십시오.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
 def main():
     args = parse_args()
-    
-    # 1. 설정 로드
-    try:
-        settings = LLMSettings()
-    except Exception as e:
-        print(f"Error loading LLM Settings. Please check env variables: {e}", file=sys.stderr)
-        sys.exit(1)
 
     # 구글 Docs 매핑 정보 및 파일 상태 경로 설정
     state_file = os.getenv("STATE_FILE_PATH", "./data/state.json")
 
     # 배치/리뷰 모드: 중복 실행 방지 잠금 획득
-    if args.mode in ("batch", "review", "merge", "backfill"):
+    if args.mode in ("batch", "review", "merge", "backfill", "repair"):
         lock_path = os.path.join(os.path.dirname(state_file), "batch.lock")
         if not acquire_batch_lock(lock_path):
             print(f"[{args.mode.upper()}] 다른 배치 프로세스가 이미 실행 중입니다. 종료합니다.", file=sys.stderr)
@@ -314,14 +412,25 @@ def main():
     }
     original_doc_mappings.update(parse_monthly_mapping(os.getenv("ORIGINAL_DOC_MONTHLY")))
 
-    # 2. 서비스 인스턴스화
+    # 문서 복구로 재생성된 문서가 있으면 매핑을 교체한다 (state.json 에 기록됨)
+    _bootstrap_state = StateManager(state_file).load_state()
+    overrides = getattr(_bootstrap_state, "doc_overrides", None) or {}
+    if overrides:
+        doc_mappings.update(overrides)
+        print(f"[Config] 재생성 문서 매핑 적용: {list(overrides)}")
+
+    verify_theme_mappings(doc_mappings)
+
+    # 2. 서비스 인스턴스화 — LLM 은 agy 워커로 실행한다 (OpenAI 키 불필요)
     state_manager = StateManager(state_file)
     telegram_client = MCPTelegramClient()
     collector = MessageCollector(telegram_client, state_manager)
-    
-    llm_gateway = OpenAILikeGateway()
-    analyzer = ResearchAnalyzer(llm_gateway, settings)
-    
+
+    roster = load_roster()
+    runner = AgyCliRunner()
+    triage = ResearchTriage(runner, roster["triage"])
+    analyzer = ResearchAnalyzer(runner, roster["extract"])
+
     docs_client = MCPGoogleDocsClient()
     writer = ResearchWriter(docs_client)
     merger = CommentMerger(docs_client, doc_mappings)
@@ -333,21 +442,32 @@ def main():
         drive_folder_id=os.getenv("DRIVE_PARENT_FOLDER_ID", ""),
     )
 
+    # --model 로 리뷰 워커 모델을 덮어쓸 수 있다 (지정하지 않으면 로스터 기본값)
+    review_spec = roster["review"]
+    if args.model:
+        review_spec = review_spec.with_model(args.model)
+
     reviewer = WeeklyReviewer(
         docs_client=docs_client,
-        llm_gateway=llm_gateway,
+        runner=runner,
+        spec=review_spec,
         doc_mappings=doc_mappings,
-        model_name=args.model,
-        base_url=settings.reasoning_llm_base_url,
-        api_key=settings.reasoning_llm_api_key
     )
 
     now = datetime.now()
+
+    print(
+        "[Config] 워커 로스터: "
+        + ", ".join(
+            f"{role}={s.model}(batch {s.batch_size})" for role, s in roster.items()
+        )
+    )
 
     # 3. Mode 스위칭 분기 처리
     if args.mode == "batch":
         run_batch(
             collector=collector,
+            triage=triage,
             analyzer=analyzer,
             writer=writer,
             merger=merger,
@@ -374,6 +494,7 @@ def main():
         print(f"Running Backfill mode for message range [{args.from_id}, {args.to_id}]...")
         run_backfill(
             collector=collector,
+            triage=triage,
             analyzer=analyzer,
             writer=writer,
             thought_doc_id=thought_doc_id,
@@ -384,6 +505,38 @@ def main():
             to_id=args.to_id,
         )
         print("Backfill completed.")
+    elif args.mode == "repair":
+        repairer = DocRepairer(
+            docs_client=docs_client,
+            analyzer=ResearchAnalyzer(runner, roster["repair"]),
+            drive_folder_id=os.getenv("DRIVE_PARENT_FOLDER_ID", ""),
+        )
+        original_ids = list(dict.fromkeys(original_doc_mappings.values()))
+        targets = (
+            list(THEMES) if args.doc in (None, "all") else [args.doc]
+        )
+        for name in targets:
+            target_id = doc_mappings.get(name)
+            if not target_id:
+                print(f"[Repair] 알 수 없는 문서 키: {name}", file=sys.stderr)
+                continue
+            try:
+                res = repairer.repair(
+                    doc_name=name,
+                    doc_id=target_id,
+                    original_doc_ids=original_ids,
+                    dry_run=args.dry_run,
+                )
+            except Exception as e:
+                print(f"[Repair] {name} 복구 실패: {str(e)[:300]}", file=sys.stderr)
+                continue
+            if res.new_doc_id:
+                state_manager.register_doc_override(name, res.new_doc_id)
+                print(
+                    f"[Repair] {name}: 매핑을 새 문서로 교체했습니다 "
+                    f"({res.new_doc_id}). AGENTS.md 매핑표도 갱신하십시오."
+                )
+        print("Repair completed.")
     elif args.mode == "status":
         state = state_manager.load_state()
         print("=== autoNote System Status ===")

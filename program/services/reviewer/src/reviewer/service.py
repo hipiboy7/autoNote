@@ -1,9 +1,11 @@
 import re
 import sys
 from datetime import datetime
+
+from agy_gateway import WorkerRunner, WorkerSpec, WorkerUnavailableError
 from google_docs_client import GoogleDocsClient
-from llm_gateway import LLMGateway
-from .parser import WeeklyReviewParser, ParsedRecord
+
+from .parser import ParsedRecord, WeeklyReviewParser
 
 # 마크다운 기호를 Docs 본문에 그대로 노출시키지 않는다 (AGENTS.md 서식 규칙).
 _MD_HEADING = re.compile(r"^\s{0,3}#{1,6}\s*")
@@ -26,20 +28,20 @@ def strip_markdown(text: str) -> str:
 
 class WeeklyReviewer:
     def __init__(
-        self, 
-        docs_client: GoogleDocsClient, 
-        llm_gateway: LLMGateway, 
+        self,
+        docs_client: GoogleDocsClient,
+        runner: WorkerRunner,
+        spec: WorkerSpec,
         doc_mappings: dict[str, str],
-        model_name: str,
-        base_url: str,
-        api_key: str
     ):
+        """주간리뷰는 판단 품질이 가장 중요하므로 로스터에서 최고 추론 워커를 받는다.
+
+        실측 기준 claude-opus-4-6-thinking 이 논리 구조 압축에 가장 정확했다.
+        """
         self.docs_client = docs_client
-        self.llm_gateway = llm_gateway
+        self.runner = runner
+        self.spec = spec
         self.doc_mappings = doc_mappings
-        self.model_name = model_name
-        self.base_url = base_url
-        self.api_key = api_key
         self.parser = WeeklyReviewParser()
 
     def generate_weekly_review(self, review_doc_id: str, base_date: datetime) -> bool:
@@ -110,22 +112,33 @@ class WeeklyReviewer:
             "   (검증해야 할 지표나 핵심 이벤트 3가지 도출)"
         )
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
-
-        # 4. reasoning-llm을 호출하여 주간 요약 텍스트 획득
-        try:
-            review_content = self.llm_gateway.request_chat(
-                base_url=self.base_url,
-                api_key=self.api_key,
-                model=self.model_name,
-                messages=messages,
-                temperature=0.2
+        # 4. review 워커를 호출하여 주간 요약 텍스트 획득.
+        #    실패 시 아무것도 기록하지 않는다 (창작 폴백 금지).
+        prompt = f"{system_prompt}\n\n{user_prompt}"
+        if len(prompt) > self.spec.max_prompt_chars:
+            # 지식 카드가 너무 많으면 최근 항목 위주로 잘라낸다 (프로그램 책임)
+            allowance = self.spec.max_prompt_chars - len(system_prompt) - 1200
+            trimmed = knowledge_cards_text[-max(allowance, 1000):]
+            user_prompt = user_prompt.replace(knowledge_cards_text, trimmed)
+            prompt = f"{system_prompt}\n\n{user_prompt}"
+            print(
+                f"[WeeklyReviewer] 지식 카드가 프롬프트 한계를 넘어 최근 {len(trimmed)}자만 사용합니다.",
+                file=sys.stderr,
             )
-        except Exception as e:
-            print(f"[WeeklyReviewer] LLM generation failed: {e}", file=sys.stderr)
+
+        try:
+            result = self.runner.run(self.spec, prompt)
+            review_content = (
+                result.structured
+                if isinstance(result.structured, str)
+                else result.raw_response
+            )
+        except WorkerUnavailableError as e:
+            print(f"[WeeklyReviewer] review 워커 실패: {str(e)[:300]}", file=sys.stderr)
+            return False
+
+        if not (review_content or "").strip():
+            print("[WeeklyReviewer] 빈 리뷰 응답 — 기록하지 않습니다.", file=sys.stderr)
             return False
 
         # 5. 단일 통합 문서 맨 아래에 누적(append) 기록 후 세피아 배경 테마 인가.

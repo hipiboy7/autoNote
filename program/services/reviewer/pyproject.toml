@@ -5,7 +5,7 @@ description = "Weekly review generation service to summarize insights in Google 
 dependencies = [
     "pydantic>=2.7.0",
     "google-docs-client",
-    "llm-gateway",
+    "agy-gateway",
 ]
 
 [build-system]

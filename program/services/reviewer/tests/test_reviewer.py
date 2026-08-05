@@ -1,7 +1,7 @@
 import pytest
 from datetime import datetime, timezone, timedelta
 from google_docs_client import GoogleDocsClient
-from llm_gateway import LLMGateway
+from agy_gateway import WorkerResult, WorkerRunner, WorkerSpec, WorkerUnavailableError
 from reviewer.parser import WeeklyReviewParser, ParsedRecord
 from reviewer.service import WeeklyReviewer
 
@@ -45,17 +45,28 @@ class MockGoogleDocsClient(GoogleDocsClient):
     def batch_update(self, doc_id: str, requests: list) -> bool:
         return True
 
-class MockLLMGateway(LLMGateway):
-    def __init__(self, response_text=""):
+REVIEW_SPEC = WorkerSpec(name="review", model="claude-opus-4-6-thinking",
+                        max_prompt_chars=24000)
+
+
+class MockWorkerRunner(WorkerRunner):
+    def __init__(self, response_text="", fail=False):
         self.response_text = response_text
+        self.fail = fail
         self.calls = 0
+        self.prompts = []
 
-    def request_chat(self, base_url: str, api_key: str, model: str, messages: list, temperature: float = 0.2) -> str:
+    def run(self, spec, prompt, schema=None):
         self.calls += 1
-        return self.response_text
-
-    def request_structured_chat(self, base_url: str, api_key: str, model: str, messages: list, response_format: type, temperature: float = 0.2):
-        return None
+        self.prompts.append(prompt)
+        if self.fail:
+            raise WorkerUnavailableError("review 워커 실패")
+        return WorkerResult(
+            structured=self.response_text,
+            raw_response=self.response_text,
+            worker=spec.name,
+            model=spec.model,
+        )
 
 def test_weekly_review_parser_extracts_recent_records():
     # 기준 시점: 2026-07-18 (토요일)
@@ -126,15 +137,13 @@ def test_weekly_reviewer_generates_and_saves_review():
     }
 
     client = MockGoogleDocsClient(doc_contents)
-    gateway = MockLLMGateway(response_text="## 주간 리서치 성찰 요약서\n1. 핵심 논리: ...")
+    gateway = MockWorkerRunner(response_text="## 주간 리서치 성찰 요약서\n1. 핵심 논리: ...")
     
     reviewer = WeeklyReviewer(
         docs_client=client,
-        llm_gateway=gateway,
+        runner=gateway,
+        spec=REVIEW_SPEC,
         doc_mappings=doc_mappings,
-        model_name="o4-mini",
-        base_url="https://api.openai.com/v1",
-        api_key="mock-key"
     )
 
     # 기준 시점: 2026-07-18 (토요일, 2026년 29주차)
@@ -180,15 +189,13 @@ def test_weekly_review_accumulates_and_preserves_past_reviews():
         theme_doc_id: theme_content,
         review_doc_id: previous_review,
     })
-    gateway = MockLLMGateway(response_text="## 이번 주 핵심 논리\n**첫째**, 공급 부족.\n---\n끝.")
+    gateway = MockWorkerRunner(response_text="## 이번 주 핵심 논리\n**첫째**, 공급 부족.\n---\n끝.")
 
     reviewer = WeeklyReviewer(
         docs_client=client,
-        llm_gateway=gateway,
+        runner=gateway,
+        spec=REVIEW_SPEC,
         doc_mappings={"반도체사이클": theme_doc_id},
-        model_name="o4-mini",
-        base_url="https://api.openai.com/v1",
-        api_key="mock-key",
     )
 
     assert reviewer.generate_weekly_review(review_doc_id, datetime(2026, 7, 18, 12, 0, 0)) is True
@@ -224,9 +231,9 @@ def test_weekly_reviewer_skips_when_no_recent_records():
     doc_mappings = {"t": theme_doc_id}
 
     client = MockGoogleDocsClient(doc_contents)
-    gateway = MockLLMGateway()
+    gateway = MockWorkerRunner()
     
-    reviewer = WeeklyReviewer(client, gateway, doc_mappings, "o4-mini", "url", "key")
+    reviewer = WeeklyReviewer(client, gateway, REVIEW_SPEC, doc_mappings)
     base_date = datetime(2026, 7, 18, 12, 0, 0)
     
     res = reviewer.generate_weekly_review("review_doc_2026-W29", base_date)
@@ -258,9 +265,9 @@ def test_weekly_reviewer_handles_exceptions_and_parses_edge_cases(capsys):
     }
 
     client = MockGoogleDocsClient(doc_contents)
-    gateway = MockLLMGateway()
+    gateway = MockWorkerRunner()
     
-    reviewer = WeeklyReviewer(client, gateway, doc_mappings, "o4-mini", "url", "key")
+    reviewer = WeeklyReviewer(client, gateway, REVIEW_SPEC, doc_mappings)
     base_date = datetime(2026, 7, 18)
     
     # 7일 내 수집 데이터가 깨진 항목뿐이므로 신규 리서치가 없는 스킵 경로를 타야 함
@@ -282,24 +289,38 @@ def test_weekly_reviewer_handles_exceptions_and_parses_edge_cases(capsys):
     }
     doc_mappings_normal = {"t": "theme_normal"}
     
-    class FaultyLLMGateway(MockLLMGateway):
-        def request_chat(self, *args, **kwargs):
-            raise Exception("API Rate Limit Exceeded")
-
     client_normal = MockGoogleDocsClient(doc_contents_normal)
-    faulty_gateway = FaultyLLMGateway()
-    
+    faulty_gateway = MockWorkerRunner(fail=True)
+
     reviewer_faulty = WeeklyReviewer(
         docs_client=client_normal,
-        llm_gateway=faulty_gateway,
+        runner=faulty_gateway,
+        spec=REVIEW_SPEC,
         doc_mappings=doc_mappings_normal,
-        model_name="o4-mini",
-        base_url="url",
-        api_key="key"
     )
-    
-    # 예외가 감지되어 False를 반환하는지 검증
+
+    # 워커 실패 시 False 를 반환하고 아무것도 기록하지 않아야 한다 (창작 폴백 금지)
     assert reviewer_faulty.generate_weekly_review("review_doc", base_date) is False
     captured = capsys.readouterr()
-    assert "LLM generation failed" in captured.err
+    assert "review 워커 실패" in captured.err
+    assert client_normal.read_text("review_doc") == ""
+
+
+def test_weekly_reviewer_returns_false_on_empty_response():
+    """빈 응답을 문서에 기록하지 않는다."""
+    client = MockGoogleDocsClient({
+        "theme_10": (
+            "━━━━━━━━━━━━━━━━━━\n"
+            "■ [t305] 2026-07-15 | 제목\n"
+            "▶ 핵심 주장: 주장\n"
+            "▶ 판단 논리: 논리\n"
+            "▶ 💭 내 생각: 생각\n"
+        ),
+        "review_doc": "",
+    })
+    reviewer = WeeklyReviewer(client, MockWorkerRunner(response_text="   "),
+                             REVIEW_SPEC, {"반도체사이클": "theme_10"})
+
+    assert reviewer.generate_weekly_review("review_doc", datetime(2026, 7, 18)) is False
+    assert client.read_text("review_doc") == ""
 

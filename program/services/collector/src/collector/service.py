@@ -5,6 +5,8 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 from telegram_client import TelegramClient, TelegramMessage
 
+from .triage import ResearchTriage
+
 class ChannelState(BaseModel):
     last_message_id: int
     last_run: datetime
@@ -16,6 +18,8 @@ class State(BaseModel):
     last_weekly_review_week: Optional[str] = None
     # 자동 생성된 월별 원문보관 문서 매핑 (YYYY-MM -> Google Docs ID)
     original_docs: Dict[str, str] = Field(default_factory=dict)
+    # 문서 복구로 재생성된 문서의 매핑 교체 (테마명 -> 새 Google Docs ID)
+    doc_overrides: Dict[str, str] = Field(default_factory=dict)
 
 class StateManager:
     def __init__(self, file_path: str):
@@ -88,6 +92,12 @@ class StateManager:
         state.original_docs[month] = doc_id
         self.save_state(state)
 
+    def register_doc_override(self, key: str, doc_id: str) -> None:
+        """문서 복구로 재생성된 문서를 매핑 교체 대상으로 등록한다."""
+        state = self.load_state()
+        state.doc_overrides[key] = doc_id
+        self.save_state(state)
+
 class MessageCollector:
     def __init__(self, client: TelegramClient, state_manager: StateManager):
         self.client = client
@@ -122,22 +132,11 @@ class MessageCollector:
         print(f"Backfill collection for {channel_id}: Collected={len(range_messages)} messages in range [{from_id}, {to_id}].")
         return range_messages
 
-    def is_research(self, msg: TelegramMessage) -> bool:
-        # URL 링크를 정규식으로 제거한 후 실제 텍스트 줄 수 계산
-        import re
-        text_without_urls = re.sub(r"https?://[^\s]+", "", msg.text)
-        lines = [line.strip() for line in text_without_urls.split("\n") if line.strip()]
-        
-        # 실제 코멘트/분석 텍스트가 3줄 이하면 제외 (단순 링크글 및 짧은 잡담글)
-        if len(lines) <= 3:
-            return False
+    def obvious_skip_reason(self, msg: TelegramMessage) -> Optional[str]:
+        """프로그램이 확정할 수 있는 비리서치 사유만 반환한다 (토큰 0).
 
-        # 광고, 공지사항, 투표 및 설문 키워드 필터링
-        filter_keywords = [
-            "광고", "제휴", "공구", "쿠팡 파트너스",
-            "공지사항", "[공지]", "★공지", "투표", "설문조사"
-        ]
-        if any(keyword in msg.text for keyword in filter_keywords):
-            return False
-
-        return True
+        줄 수 기반 판정은 더 이상 쓰지 않는다. 실측 결과 최근 200건 중 118건(59%)이
+        기존 '3줄 이하 제외' 규칙에 탈락했고, 그중에는 사이드카·수급 판단처럼 짧지만
+        핵심적인 코멘트가 있었다. 애매한 글은 ResearchTriage 워커가 배치로 판별한다.
+        """
+        return ResearchTriage.obvious_skip_reason(msg)

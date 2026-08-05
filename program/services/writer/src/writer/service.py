@@ -3,6 +3,43 @@ from google_docs_client import GoogleDocsClient
 from telegram_client import TelegramMessage
 from analyzer import ResearchReport
 
+BLOCK_SEPARATOR = "━━━━━━━━━━━━━━━━━━"
+DEFAULT_SOURCE = "피터케이 채널"
+UNRECORDED = "미기록"
+
+
+def format_research_block(
+    identifier: str,
+    date_str: str,
+    title: str,
+    report: ResearchReport,
+    thought: str = "",
+    source: str = DEFAULT_SOURCE,
+) -> str:
+    """테마/종목 문서에 기록할 리서치 블록 텍스트를 만든다.
+
+    기록 경로(배치)와 재생성 경로(문서 복구)가 동일한 서식을 쓰도록 함수로 분리한다.
+    thought 가 비어 있으면 식별자가 붙은 미기록 placeholder 를 넣는다. 식별자를 붙이는
+    이유는 Google Docs replaceAllText 가 문단 단위로만 일치하기 때문이다
+    (식별자 없으면 여러 블록의 '미기록' 줄을 구별할 수 없다).
+    """
+    evidence_str = "\n".join(f"  - {ev.strip()}" for ev in report.evidence)
+    risks_str = "\n".join(f"  - {rk.strip()}" for rk in report.risks)
+    thought_line = thought.strip() or f"{UNRECORDED} [{identifier}]"
+
+    return (
+        f"{BLOCK_SEPARATOR}\n"
+        f"■ [{identifier}] {date_str} | {title}\n"
+        f"▶ 출처: {source}\n"
+        f"▶ 핵심 주장: {report.main_claim.strip()}\n"
+        f"▶ 근거·데이터:\n{evidence_str}\n"
+        f"▶ 판단 논리: {report.logic.strip()}\n"
+        f"▶ 리스크·반대 시나리오:\n{risks_str}\n"
+        f"▶ 💭 내 생각: {thought_line}\n"
+        f"▶ ❓ 생각해볼 질문: {report.critical_question.strip()}\n"
+    )
+
+
 class ResearchWriter:
     def __init__(self, docs_client: GoogleDocsClient):
         self.docs_client = docs_client
@@ -31,24 +68,11 @@ class ResearchWriter:
         title: str
     ) -> bool:
         """테마/종목 노트 문서에 LLM 분석 결과를 구조화하여 추가하고 세피아 테마를 적용한다."""
-        date_str = self._format_date(msg.date)
-        
-        evidence_str = "\n".join([f"  - {ev.strip()}" for ev in report.evidence])
-        risks_str = "\n".join([f"  - {rk.strip()}" for rk in report.risks])
-
-        formatted_text = (
-            "━━━━━━━━━━━━━━━━━━\n"
-            f"■ [{prefix}{msg.id}] {date_str} | {title}\n"
-            "▶ 출처: 피터케이 채널\n"
-            f"▶ 핵심 주장: {report.main_claim.strip()}\n"
-            f"▶ 근거·데이터:\n{evidence_str}\n"
-            f"▶ 판단 논리: {report.logic.strip()}\n"
-            f"▶ 리스크·반대 시나리오:\n{risks_str}\n"
-            # 식별자를 붙여 문서 내에서 유일한 문단으로 만든다.
-            # Google Docs replaceAllText 는 한 문단 단위로만 일치하므로, 식별자가 없으면
-            # 여러 블록의 '미기록' 줄이 구별되지 않아 생각 병합을 정밀하게 할 수 없다.
-            f"▶ 💭 내 생각: 미기록 [{prefix}{msg.id}]\n"
-            f"▶ ❓ 생각해볼 질문: {report.critical_question.strip()}\n"
+        formatted_text = format_research_block(
+            identifier=f"{prefix}{msg.id}",
+            date_str=self._format_date(msg.date),
+            title=title,
+            report=report,
         )
 
         # 1. 본문 작성

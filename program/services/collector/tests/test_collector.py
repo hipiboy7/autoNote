@@ -55,15 +55,15 @@ def test_collector_collects_all_new_messages_and_filters_correctly(temp_state_fi
     # 검증 2: 메시지 ID 오름차순 정렬이어야 함 (101, 102, 103, 104)
     assert [msg.id for msg in collected] == [101, 102, 103, 104]
 
-    # 검증 3: 개별 메시지에 대한 리서치 선별(is_research) 검증
-    # - ID 101 (짧은 글): 리서치 아님
-    assert not collector.is_research(collected[0]) 
-    # - ID 102 (정상 반도체 리서치): 리서치 맞음
-    assert collector.is_research(collected[1])
-    # - ID 103 (광고/제휴): 리서치 아님
-    assert not collector.is_research(collected[2])
-    # - ID 104 (정상 환율 리서치): 리서치 맞음
-    assert collector.is_research(collected[3])
+    # 검증 3: 프로그램 사전 필터는 '확실한 것'만 걸러낸다 (토큰 0)
+    # - ID 101 (짧은 글): 짧다는 이유로 버리지 않는다 → triage 워커가 판별
+    assert collector.obvious_skip_reason(collected[0]) is None
+    # - ID 102 (정상 반도체 리서치): 통과
+    assert collector.obvious_skip_reason(collected[1]) is None
+    # - ID 103 (광고/제휴): 프로그램이 확정 제외
+    assert collector.obvious_skip_reason(collected[2]) == "광고·공지 키워드"
+    # - ID 104 (정상 환율 리서치): 통과
+    assert collector.obvious_skip_reason(collected[3]) is None
 
 def test_collector_fallback_when_state_file_missing(temp_state_file):
     if os.path.exists(temp_state_file):
@@ -100,35 +100,32 @@ def test_state_manager_handles_save_error(tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "Error saving state.json" in captured.out
-
-def test_collector_filters_simple_links(temp_state_file):
+def test_program_filter_only_rejects_certain_cases(temp_state_file):
+    """프로그램 사전 필터는 확실한 것만 걸러낸다. 줄 수는 기준이 아니다."""
     state_manager = StateManager(temp_state_file)
     collector = MessageCollector(None, state_manager)
 
-    # 1. 단순 링크글 -> 리서치 제외
-    msg1 = TelegramMessage(id=1, channel_id="c", text="https://blog.naver.com/some_post", date=datetime.now(timezone.utc))
-    assert not collector.is_research(msg1)
+    def msg(text, msg_id=1):
+        return TelegramMessage(id=msg_id, channel_id="c", text=text,
+                               date=datetime.now(timezone.utc))
 
-    # 2. 짧은 코멘트 동반 링크글 -> 리서치 제외
-    msg2 = TelegramMessage(id=2, channel_id="c", text="링크 공유합니다.\nhttps://easyconomics.com", date=datetime.now(timezone.utc))
-    assert not collector.is_research(msg2)
+    # 1. 링크만 있는 글 -> 확정 제외
+    assert collector.obvious_skip_reason(msg("https://blog.naver.com/some_post")) == "링크만 있음"
 
-    # 3. 풍부한 분석 동반 링크글 -> 리서치 포함
-    msg3 = TelegramMessage(id=3, channel_id="c", text="삼성전자 ADR 분석\n라인 2 코멘트\n라인 3 데이터\n라인 4 결론\nhttps://m.blog.naver.com", date=datetime.now(timezone.utc))
-    assert collector.is_research(msg3)
+    # 2. 본문 없는 미디어 전용 글 -> 확정 제외
+    assert collector.obvious_skip_reason(msg("[empty]")) == "본문 없음(미디어 전용)"
+    assert collector.obvious_skip_reason(msg("   ")) == "본문 없음(미디어 전용)"
 
-def test_collector_filters_announcements_and_polls(temp_state_file):
-    state_manager = StateManager(temp_state_file)
-    collector = MessageCollector(None, state_manager)
+    # 3. 광고·공지·투표 -> 확정 제외
+    assert collector.obvious_skip_reason(msg("[공지] 다음주 일정 공지합니다.")) == "광고·공지 키워드"
+    assert collector.obvious_skip_reason(msg("설문조사 참여 부탁드립니다.")) == "광고·공지 키워드"
+    assert collector.obvious_skip_reason(msg("추천 제휴 서비스 안내")) == "광고·공지 키워드"
 
-    # 1. 공지사항 -> 리서치 제외
-    msg1 = TelegramMessage(id=1, channel_id="c", text="[공지] 다음주 일정 공지합니다.\n라인 2\n라인 3\n라인 4", date=datetime.now(timezone.utc))
-    assert not collector.is_research(msg1)
+    # 4. 짧은 판단 코멘트 -> 프로그램이 버리지 않는다 (triage 워커가 판별)
+    #    과거 3줄 규칙이 이런 글을 탈락시켜 사람이 수동 보정해야 했다 (r753·r755).
+    short_call = msg("코스닥 3일연속 사이드카.\n바닥에서는 단기 과열권인듯 합니다")
+    assert collector.obvious_skip_reason(short_call) is None
 
-    # 2. 투표 -> 리서치 제외
-    msg2 = TelegramMessage(id=2, channel_id="c", text="설문조사 참여 부탁드립니다.\n1. 매수\n2. 매도\n3. 관망\n많은 참여 바랍니다.", date=datetime.now(timezone.utc))
-    assert not collector.is_research(msg2)
-
-    # 3. 정상 리서치 -> 리서치 포함
-    msg3 = TelegramMessage(id=3, channel_id="c", text="삼성전자 공급망 분석\n라인 2 내용\n라인 3 데이터\n라인 4 결론", date=datetime.now(timezone.utc))
-    assert collector.is_research(msg3)
+    # 5. 코멘트 동반 링크글 -> 프로그램이 버리지 않는다
+    with_comment = msg("전쟁 장기화가 쉽지 않은 상황.\nhttps://m.blog.naver.com/x")
+    assert collector.obvious_skip_reason(with_comment) is None

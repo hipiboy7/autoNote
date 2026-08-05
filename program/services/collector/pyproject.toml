@@ -3,6 +3,7 @@ name = "collector"
 version = "0.1.0"
 description = "Research message collector service"
 dependencies = [
+    "agy-gateway",
     "pydantic>=2.7.0",
     "telegram-client",
 ]

@@ -1,11 +1,11 @@
 [project]
 name = "analyzer"
 version = "0.1.0"
-description = "Research report analyzer service using LLM Gateway"
+description = "Research report analyzer service using agy worker gateway"
 dependencies = [
     "pydantic>=2.7.0",
     "pydantic-settings>=2.2.0",
-    "llm-gateway",
+    "agy-gateway",
 ]
 
 [build-system]

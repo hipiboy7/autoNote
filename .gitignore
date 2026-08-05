@@ -22,6 +22,7 @@ data/state.json.bak
 data/extracted_messages.json
 data/formatted_outputs/
 data/batch.lock
+data/agy_usage.jsonl
 
 # --- 캐시 / 빌드 산출물 ---
 __pycache__/

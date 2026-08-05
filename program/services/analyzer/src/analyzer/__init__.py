@@ -1,3 +1,20 @@
-from .service import ResearchAnalyzer, ResearchReport, LLMAnalysisError
+from .grounding import check_grounding, ungrounded_numbers
+from .service import (
+    THEMES,
+    BatchReportItem,
+    BatchReports,
+    LLMAnalysisError,
+    ResearchAnalyzer,
+    ResearchReport,
+)
 
-__all__ = ["ResearchAnalyzer", "ResearchReport", "LLMAnalysisError"]
+__all__ = [
+    "THEMES",
+    "BatchReportItem",
+    "BatchReports",
+    "LLMAnalysisError",
+    "ResearchAnalyzer",
+    "ResearchReport",
+    "check_grounding",
+    "ungrounded_numbers",
+]

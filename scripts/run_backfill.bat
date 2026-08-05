@@ -4,7 +4,7 @@ setlocal
 
 cd /d D:\autoNote
 
-set PYTHONPATH=program/src;program/libs/google-docs-client/src;program/libs/telegram-client/src;program/libs/llm-gateway/src;program/services/analyzer/src;program/services/collector/src;program/services/merger/src;program/services/reviewer/src;program/services/writer/src
+set PYTHONPATH=program/src;program/libs/agy-gateway/src;program/libs/google-docs-client/src;program/libs/telegram-client/src;program/libs/llm-gateway/src;program/services/analyzer/src;program/services/collector/src;program/services/merger/src;program/services/reviewer/src;program/services/writer/src
 set PYTHONIOENCODING=utf-8
 
 echo autoNote 백필 실행 중... (from-id=%1, to-id=%2)
