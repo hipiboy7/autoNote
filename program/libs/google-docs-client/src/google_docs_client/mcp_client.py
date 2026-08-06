@@ -131,8 +131,26 @@ class MCPGoogleDocsClient(GoogleDocsClient):
                 time.sleep(1)
         return False
 
+    @staticmethod
+    def _strip_title_preamble(text: str) -> str:
+        """docs.getText 가 붙이는 'Document Title: ...' 머리말을 제거한다.
+
+        이 줄은 문서 본문이 아니라 도구가 덧붙인 메타데이터다. 본문으로 착각하면
+        문서를 재구성할 때 본문에 실제로 기록되어 누적된다 (실측: 되쓰기 과정에서
+        'Document Title:' 줄이 본문 블록으로 남았다).
+        """
+        lines = text.split("\n")
+        index = 0
+        while index < len(lines):
+            stripped = lines[index].strip()
+            if stripped.startswith("Document Title:") or not stripped:
+                index += 1
+                continue
+            break
+        return "\n".join(lines[index:])
+
     def read_text(self, doc_id: str) -> str:
-        """google-workspace MCP의 docs.getText 도구를 호출하여 문서 전체 내용을 조회한다."""
+        """google-workspace MCP의 docs.getText 도구를 호출하여 문서 본문을 조회한다."""
         try:
             params = {
                 "name": "docs.getText",
@@ -151,8 +169,8 @@ class MCPGoogleDocsClient(GoogleDocsClient):
                         text_parts.append(item["text"])
                     elif isinstance(item, str):
                         text_parts.append(item)
-                return "".join(text_parts)
-            return content
+                content = "".join(text_parts)
+            return self._strip_title_preamble(content)
         except Exception as e:
             print(f"[MCPGoogleDocsClient] read_text failed: {e}", file=sys.stderr)
             return ""

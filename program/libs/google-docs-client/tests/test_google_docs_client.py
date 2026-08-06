@@ -49,6 +49,41 @@ def test_mcp_client_handshake_and_append_text(mock_subprocess):
     client.close()
     mock_proc.terminate.assert_called_once()
 
+@patch("subprocess.Popen")
+def test_read_text_strips_document_title_preamble(mock_popen):
+    """docs.getText 가 붙이는 'Document Title:' 은 본문이 아니다.
+
+    본문으로 착각하면 문서를 재구성할 때 실제 본문에 기록되어 누적된다
+    (실측: 되쓰기 후 본문에 'Document Title:' 줄 2개가 남았다).
+    """
+    mock_proc = MagicMock()
+    mock_popen.return_value = mock_proc
+    body = "# 10_테마 금리\n위에서 아래로 시간순 누적.\n━━━\n■ [r518] 2026-07-26 | 제목\n"
+    mock_proc.stdout.readline.side_effect = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}),
+        json.dumps({"jsonrpc": "2.0", "id": 2,
+                    "result": {"text": f"Document Title: 10_테마 금리\n\n{body}"}}),
+    ]
+
+    text = MCPGoogleDocsClient(mcp_cmd=["mock-node"]).read_text("doc-1")
+
+    assert "Document Title" not in text
+    assert text.startswith("# 10_테마 금리")
+    assert "[r518]" in text
+
+
+@patch("subprocess.Popen")
+def test_read_text_keeps_body_when_no_preamble(mock_popen):
+    mock_proc = MagicMock()
+    mock_popen.return_value = mock_proc
+    mock_proc.stdout.readline.side_effect = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}),
+        json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"text": "■ [r1] 본문\n"}}),
+    ]
+
+    assert MCPGoogleDocsClient(mcp_cmd=["mock-node"]).read_text("doc-1") == "■ [r1] 본문\n"
+
+
 def test_apply_sepia_theme_delegates_to_rest_applier(mock_subprocess):
     """MCP docs.formatText 로는 배경색을 못 바꾼다. REST 적용기에 위임해야 한다.
 
