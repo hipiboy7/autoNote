@@ -1,8 +1,6 @@
 import os
 import sys
 import argparse
-import atexit
-import msvcrt
 from datetime import datetime, timezone
 from typing import Callable, Dict
 
@@ -19,6 +17,7 @@ from merger.service import CommentMerger
 from reviewer.service import WeeklyReviewer
 
 from batch_health import VERDICT_OK, evaluate_batch_health
+from batch_lock import require_lock
 from notify import AlertContext, BatchNotifier
 from original_docs import OriginalDocRegistry, parse_monthly_mapping
 from repair_docs import DocRepairer
@@ -71,47 +70,6 @@ def parse_args():
         help="백필 종료 메시지 ID (backfill 모드 전용)"
     )
     return parser.parse_args()
-
-# --- 배치 중복 실행 방지 파일 잠금 (Windows) ---
-_lock_fd = None
-
-def acquire_batch_lock(lock_path: str) -> bool:
-    """배치 중복 실행 방지를 위한 파일 잠금 획득.
-    
-    msvcrt.locking()을 사용하여 배타적 잠금을 시도합니다.
-    이미 다른 프로세스가 잠금을 보유 중이면 False를 반환합니다.
-    """
-    global _lock_fd
-    try:
-        _lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT)
-        # 비차단 배타적 잠금 시도 (1바이트)
-        msvcrt.locking(_lock_fd, msvcrt.LK_NBLCK, 1)
-        # 잠금 성공 후 PID 기록 (디버깅 용도)
-        os.lseek(_lock_fd, 0, os.SEEK_SET)
-        os.write(_lock_fd, str(os.getpid()).encode())
-        atexit.register(release_batch_lock, lock_path)
-        return True
-    except (IOError, OSError):
-        if _lock_fd is not None:
-            os.close(_lock_fd)
-            _lock_fd = None
-        return False
-
-def release_batch_lock(lock_path: str):
-    """배치 잠금 해제 및 잠금 파일 정리."""
-    global _lock_fd
-    if _lock_fd is not None:
-        try:
-            os.lseek(_lock_fd, 0, os.SEEK_SET)
-            msvcrt.locking(_lock_fd, msvcrt.LK_UNLCK, 1)
-            os.close(_lock_fd)
-        except Exception:
-            pass
-        _lock_fd = None
-    try:
-        os.remove(lock_path)
-    except Exception:
-        pass
 
 def resolve_original_doc(msg_date: datetime, original_doc_mappings: Dict[str, str], fallback_doc_id: str) -> str:
     """월별 원문보관 문서 ID를 반환한다 (매핑 dict 만 사용하는 단순 조회).
@@ -383,11 +341,8 @@ def main():
 
     # 배치/리뷰 모드: 중복 실행 방지 잠금 획득
     if args.mode in ("batch", "review", "merge", "backfill", "repair", "restore"):
-        lock_path = os.path.join(os.path.dirname(state_file), "batch.lock")
-        if not acquire_batch_lock(lock_path):
-            print(f"[{args.mode.upper()}] 다른 배치 프로세스가 이미 실행 중입니다. 종료합니다.", file=sys.stderr)
+        if not require_lock(args.mode.upper(), state_file):
             sys.exit(0)
-        print(f"[{args.mode.upper()}] 배치 잠금 획득 완료 (PID: {os.getpid()})")
 
     thought_doc_id = os.getenv("THOUGHT_DOC_ID", "1p0d-bEHdVTzQjRnmXzzzB5HRvUCQSUyktUpksV70TUc")
     original_doc_id = os.getenv("ORIGINAL_DOC_ID", "17b8iLt_KxjWZX7On9hnPXCLZtm6fpT8GBgYb_X85PHY")

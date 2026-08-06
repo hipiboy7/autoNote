@@ -41,6 +41,7 @@ for _rel in (
 
 os.chdir(_ROOT)
 
+from batch_lock import require_lock
 from google_docs_client.mcp_client import MCPGoogleDocsClient
 from restore_docs import rewrite_document
 from telegram_client.mcp_client import MCPTelegramClient
@@ -74,7 +75,9 @@ def build_correct_dates(limit: int) -> dict:
 def main() -> int:
     argv = sys.argv[1:]
     dry_run = "--dry-run" in argv
-    limit = 400
+    # 기본값을 넉넉히 잡는다. 400 이면 오래된 글의 시각을 못 얻어 조용히 건너뛰면서도
+    # '완료' 로 보고된다 (실측: limit 400 에서 미확보 261건, limit 1000 에서 4건).
+    limit = 1000
     if "--limit" in argv:
         try:
             limit = int(argv[argv.index("--limit") + 1])
@@ -83,6 +86,11 @@ def main() -> int:
             return 1
     names = [a for a in argv if not a.startswith("--") and not a.isdigit()]
     targets = names or list(DOCS)
+
+    # 일일 배치(08:50)와 겹치면 배치가 방금 기록한 내용이 재작성으로 덮여 유실된다.
+    # 런북에 "배치 시간대를 피하라" 고 적어두는 것만으로는 부족하므로 프로그램이 막는다.
+    if not dry_run and not require_lock("RELABEL"):
+        return 1
 
     print(f"[Relabel] 텔레그램에서 메시지 시각 조회 (limit={limit})...")
     correct = build_correct_dates(limit)
