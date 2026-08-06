@@ -26,7 +26,11 @@ for _rel in (
 
 os.chdir(_ROOT)
 
-from analyzer.grounding import FABRICATION_MARKERS, ungrounded_numbers
+from analyzer.grounding import (
+    FABRICATION_MARKERS,
+    find_fabrication_markers,
+    ungrounded_numbers,
+)
 from collector.service import StateManager
 from google_docs_client.mcp_client import MCPGoogleDocsClient
 from repair_docs import parse_blocks, parse_original_sources
@@ -46,6 +50,27 @@ ORIGINALS = [
     "17b8iLt_KxjWZX7On9hnPXCLZtm6fpT8GBgYb_X85PHY",  # 2026-07
     "1gfyz-nJZ5vtcH8enwnxcGgjjpZ6Smoqj0RvVDix5BMI",  # 2026-08
 ]
+
+EVIDENCE_SECTION = re.compile(
+    r"▶\s*근거·데이터:(.*?)(?=▶\s*판단 논리:)", re.DOTALL
+)
+
+
+def extract_evidence(block_text: str) -> list:
+    """근거 항목만 뽑는다.
+
+    근거와 리스크가 같은 '  - ' 불릿을 쓰므로 구분해야 한다. 리스크는 원문 근거가
+    아니라 해석·전망이므로 숫자 대조 대상이 아니다 (analyzer 도 동일 기준).
+    """
+    section = EVIDENCE_SECTION.search(block_text)
+    if not section:
+        return []
+    return [
+        line.strip().lstrip("-").strip()
+        for line in section.group(1).split("\n")
+        if line.strip().lstrip("-").strip()
+    ]
+
 
 overrides = getattr(StateManager("./data/state.json").load_state(), "doc_overrides", {}) or {}
 targets = sys.argv[1:] or sorted(overrides)
@@ -78,20 +103,31 @@ try:
         new_markers = sum(new_text.count(m) for m in FABRICATION_MARKERS)
         old_markers = sum(old_text.count(m) for m in FABRICATION_MARKERS)
 
-        violations = []
+        # 재생성된 블록과 보존된 블록을 구분한다.
+        # 복구는 '창작 표지가 있던 블록' 만 재생성하고 나머지는 원문 그대로 옮긴다.
+        # 보존 블록의 근거 문제는 과거 수동/폴백 기록에서 비롯한 별개 사안이므로,
+        # 재생성 품질 판정에 섞으면 안 된다.
+        regenerated_ids = {
+            b.identifier for b in old_blocks if find_fabrication_markers([b.text])
+        }
+
+        violations = []          # 재생성 블록의 위반 (복구 품질 문제)
+        legacy_issues = []       # 보존 블록의 위반 (기존 기록 문제)
         checked = 0
         for b in new_blocks:
             src = sources.get(b.identifier.lower())
             if not src:
                 continue
-            evidence = re.findall(r"^\s*-\s*(.+)$", b.text, re.MULTILINE)
+            evidence = extract_evidence(b.text)
             if not evidence:
                 continue
             checked += 1
             for item in evidence:
                 bad = ungrounded_numbers(item, src)
-                if bad:
-                    violations.append((b.identifier, sorted(bad), item[:60]))
+                if not bad:
+                    continue
+                target = violations if b.identifier in regenerated_ids else legacy_issues
+                target.append((b.identifier, sorted(bad), item[:60]))
 
         # 사용자 💭 보존 확인
         old_thoughts = {b.identifier: b.thought for b in old_blocks if b.thought}
@@ -105,9 +141,13 @@ try:
         print(f"  식별자 보존: {'OK' if preserved else '누락 있음'} / 순서: {'OK' if order_ok else '변경됨'}")
         print(f"  창작 표지: 구버전 {old_markers} → 신규 {new_markers}"
               f"{'  (완전 제거)' if new_markers == 0 else '  ⚠ 잔존'}")
-        print(f"  근거 대조: {checked}블록 검사 / 위반 {len(violations)}건")
+        print(f"  근거 대조: {checked}블록 검사")
+        print(f"    재생성 블록 위반: {len(violations)}건  (복구 품질)")
         for ident, bad, item in violations[:5]:
-            print(f"    ⚠ [{ident}] 원문에 없는 숫자 {bad}: {item}")
+            print(f"      ⚠ [{ident}] 원문에 없는 숫자 {bad}: {item}")
+        print(f"    보존 블록 위반: {len(legacy_issues)}건  (과거 기록 문제, 복구 범위 밖)")
+        for ident, bad, item in legacy_issues[:5]:
+            print(f"      · [{ident}] 원문에 없는 숫자 {bad}: {item}")
         print(f"  사용자 💭 유실: {len(lost)}건 {lost[:5] if lost else ''}")
         print(f"  신규 문서 ID: {new_id}")
         print()
