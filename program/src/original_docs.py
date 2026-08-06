@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Dict, Optional
 
 from google_docs_client import GoogleDocsClient
+from writer import local_month_key
 
 DOC_TITLE_TEMPLATE = "00_원문보관 {month}"
 
@@ -56,7 +57,8 @@ class OriginalDocRegistry:
         self._cache: Dict[str, str] = {}
 
     def resolve(self, msg_date: datetime) -> str:
-        month = msg_date.strftime("%Y-%m")
+        # 현지(KST) 기준 월. UTC 로 잡으면 9월 1일 오전 글이 8월 문서로 간다.
+        month = local_month_key(msg_date)
 
         if month in self._cache:
             return self._cache[month]

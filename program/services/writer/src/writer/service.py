@@ -3,6 +3,8 @@ from google_docs_client import GoogleDocsClient
 from telegram_client import TelegramMessage
 from analyzer import ResearchReport
 
+from .timebase import local_date_str
+
 BLOCK_SEPARATOR = "━━━━━━━━━━━━━━━━━━"
 DEFAULT_SOURCE = "피터케이 채널"
 UNRECORDED = "미기록"
@@ -45,8 +47,11 @@ class ResearchWriter:
         self.docs_client = docs_client
 
     def _format_date(self, dt: datetime) -> str:
-        # datetime 객체를 KST 또는 UTC 문자열 YYYY-MM-DD 형태로 변환
-        return dt.strftime("%Y-%m-%d")
+        """기록용 날짜 문자열. 메시지 시각(UTC)을 현지(KST) 기준으로 변환한다.
+
+        UTC 를 그대로 찍으면 한국 시간 오전 0~9시 글이 전날로 기록된다.
+        """
+        return local_date_str(dt)
 
     def write_original_backup(self, doc_id: str, msg: TelegramMessage, title: str) -> bool:
         """원문 보관소 문서에 텔레그램 메시지 원문을 포맷팅하여 추가한다."""

@@ -24,6 +24,7 @@ from original_docs import OriginalDocRegistry, parse_monthly_mapping
 from repair_docs import DocRepairer
 from restore_docs import DocRestorer
 from worker_roster import load_roster
+from writer import local_now
 
 def parse_args():
     parser = argparse.ArgumentParser(description="autoNote 투자 리서치 하이브리드 배치 CLI")
@@ -460,7 +461,8 @@ def main():
         doc_mappings=doc_mappings,
     )
 
-    now = datetime.now()
+    # 배치 기준 시각은 현지(KST). 주간리뷰 7일 창과 ISO 주차 경계가 이 값을 따른다.
+    now = local_now()
 
     print(
         "[Config] 워커 로스터: "

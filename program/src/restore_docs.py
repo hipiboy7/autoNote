@@ -41,6 +41,53 @@ def _count_blocks(text: str) -> int:
     return len([c for c in text.split(BLOCK_SEPARATOR) if c.strip()])
 
 
+def body_chunks(text: str, chunk_chars: int = CHUNK_CHARS):
+    """블록 경계를 지켜 문서 본문을 나눈다 (블록이 중간에서 잘리면 안 된다).
+
+    첫 조각에 `■` 헤더가 없으면 문서 머리말로 보아 구분선을 붙이지 않는다.
+    """
+    parts = [p for p in text.split(BLOCK_SEPARATOR) if p.strip()]
+    buffer = ""
+    for index, part in enumerate(parts):
+        if index == 0 and "■" not in part:
+            block = part.strip() + "\n"
+        else:
+            block = f"{BLOCK_SEPARATOR}\n{part.strip()}\n"
+        if buffer and len(buffer) + len(block) > chunk_chars:
+            yield buffer
+            buffer = block
+        else:
+            buffer += block
+    if buffer:
+        yield buffer
+
+
+def rewrite_document(docs_client, doc_id: str, new_text: str,
+                     apply_theme: bool = True) -> bool:
+    """문서 본문을 새 텍스트로 통째 교체한다.
+
+    줄 단위 치환(replace_line)은 건당 전체 문서 읽기 검증이 따라붙어, 수백 건을 고칠
+    때는 비현실적으로 느리다. 대량 보정에는 이 경로를 쓴다.
+    """
+    if not new_text.strip():
+        print(f"[Rewrite] 빈 내용으로 덮어쓰지 않습니다 (doc={doc_id}).", file=sys.stderr)
+        return False
+
+    if not docs_client.clear_body(doc_id):
+        print(f"[Rewrite] 본문 비우기 실패 (doc={doc_id}).", file=sys.stderr)
+        return False
+
+    for chunk in body_chunks(new_text):
+        if not docs_client.append_text(doc_id, chunk):
+            print(f"[Rewrite] 쓰기 실패 (doc={doc_id}). 문서를 확인하십시오.",
+                  file=sys.stderr)
+            return False
+
+    if apply_theme:
+        docs_client.apply_sepia_theme(doc_id)
+    return True
+
+
 class DocRestorer:
     def __init__(self, docs_client, state_manager, apply_theme: bool = True):
         self.docs_client = docs_client
