@@ -49,11 +49,29 @@ def test_mcp_client_handshake_and_append_text(mock_subprocess):
     client.close()
     mock_proc.terminate.assert_called_once()
 
-def test_mcp_client_apply_sepia_theme(mock_subprocess):
-    # sepia theme 및 batchUpdate 기능은 현행 API 로그 우회이므로 프로세스 통신 없이 즉각 True 반환
+def test_apply_sepia_theme_delegates_to_rest_applier(mock_subprocess):
+    """MCP docs.formatText 로는 배경색을 못 바꾼다. REST 적용기에 위임해야 한다.
+
+    과거 구현은 style:"sepia" 를 보내고 예외를 삼킨 뒤 무조건 True 를 반환했다.
+    그 결과 이 경로로 만든 문서는 background 가 미설정 상태로 남았다.
+    """
     client = MCPGoogleDocsClient(mcp_cmd=["mock-node", "mock-script.js"])
+    fake = MagicMock()
+    fake.apply.return_value = True
+    client._theme_applier = fake
+
     assert client.apply_sepia_theme("doc-123") is True
-    assert client.batch_update("doc-123", []) is True
+    fake.apply.assert_called_once_with("doc-123")
+
+
+def test_apply_sepia_theme_reports_real_failure(mock_subprocess):
+    """실패를 True 로 감추지 않는다."""
+    client = MCPGoogleDocsClient(mcp_cmd=["mock-node", "mock-script.js"])
+    fake = MagicMock()
+    fake.apply.return_value = False
+    client._theme_applier = fake
+
+    assert client.apply_sepia_theme("doc-123") is False
 
 def test_mcp_client_connection_error(capsys):
     with patch("subprocess.Popen") as mock_popen:

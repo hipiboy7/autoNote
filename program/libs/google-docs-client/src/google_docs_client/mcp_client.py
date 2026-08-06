@@ -4,6 +4,8 @@ import sys
 import json
 import subprocess
 from typing import Any, List, Optional
+from .docs_style import SepiaThemeApplier
+from .google_auth import GoogleTokenProvider
 from .interface import GoogleDocsClient
 
 class MCPGoogleDocsClient(GoogleDocsClient):
@@ -17,6 +19,7 @@ class MCPGoogleDocsClient(GoogleDocsClient):
             
         self.process = None
         self.request_id = 1
+        self._theme_applier: Optional[SepiaThemeApplier] = None
 
     def _ensure_connected(self):
         if self.process is not None:
@@ -301,31 +304,27 @@ class MCPGoogleDocsClient(GoogleDocsClient):
             print(f"[MCPGoogleDocsClient] create_doc 실패: {e}", file=sys.stderr)
             return ""
 
+    def refresh_google_token(self) -> None:
+        """MCP auth.refreshToken 을 호출한다. 갱신 결과는 토큰 저장소에 기록된다."""
+        self._send_request("tools/call", {"name": "auth.refreshToken", "arguments": {}})
+
+    @property
+    def theme_applier(self) -> SepiaThemeApplier:
+        if self._theme_applier is None:
+            self._theme_applier = SepiaThemeApplier(
+                GoogleTokenProvider(refresh_callback=self.refresh_google_token)
+            )
+        return self._theme_applier
+
     def apply_sepia_theme(self, doc_id: str) -> bool:
+        """문서 배경색과 글자색을 세피아/라이트 테마로 지정한다 (AGENTS.md 색상 통일 규칙).
+
+        MCP `docs.formatText` 는 문자 스타일만 지원하고 **문서 배경색을 바꿀 수 없다**.
+        과거 구현은 `style: "sepia"` 를 보내고 예외를 삼킨 뒤 무조건 True 를 반환해,
+        규칙이 지켜지지 않는데도 성공으로 보고했다. 이제 Docs REST API 로 실제 적용하고
+        진짜 결과를 반환한다.
         """
-        google-workspace MCP의 updateDocumentStyle 도구를 전송하여
-        구글 문서 전체 페이지 바탕색을 읽기 편한 세피아 라이트 테마(#FDF6E3)로 지정한다.
-        """
-        try:
-            params = {
-                "name": "docs.formatText",
-                "arguments": {
-                    "documentId": doc_id,
-                    "formats": [
-                        {
-                            "startIndex": 1,
-                            "endIndex": 2,
-                            "style": "sepia"
-                        }
-                    ]
-                }
-            }
-            self._send_request("tools/call", params)
-            print(f"[MCPGoogleDocsClient] Sepia theme and style applied to document {doc_id}.")
-            return True
-        except Exception as e:
-            print(f"[MCPGoogleDocsClient] apply_sepia_theme info: {e}", file=sys.stderr)
-            return True
+        return self.theme_applier.apply(doc_id)
 
     def batch_update(self, doc_id: str, requests: list) -> bool:
         """구글 Docs의 커스텀 batchUpdate API를 시뮬레이션하거나 우회 전송한다."""
