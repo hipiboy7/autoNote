@@ -127,8 +127,7 @@ agy --model <id> [--effort low|medium|high] --output-format json
 | 테마: 반도체사이클 | [10_테마 반도체사이클](https://docs.google.com/document/d/1UeI5DBboBk-Tedvu4G6ucOuZdxJAtkRg55N_VMV4U-s/edit) |
 | 테마: 시장심리·수급 | [10_테마 시장심리·수급](https://docs.google.com/document/d/1k2vvUvzgl6iW08MGbY9oehc2zBnKtPAi-z6OqrwaSoA/edit) |
 | 테마: 환율·매크로 | [10_테마 환율·매크로](https://docs.google.com/document/d/18lU0RmfkofcRuosdPn664x4AG8DSO12gvsDqLUi2eKE/edit) |
-| 테마: 금리 **(재생성본, 현행)** | [금리 (재생성)](https://docs.google.com/document/d/1C_FjVM2XWAvONXD0kwocVFsUq4SpwSHf2vxerJn6D2U/edit) |
-| 테마: 금리 (구버전-창작오염, 참조용) | [10_테마 금리](https://docs.google.com/document/d/1PK88LaNGhBrxGC0xFGX4tkTPUU15kqzuOhK5SzQ74Eo/edit) |
+| 테마: 금리 | [10_테마 금리](https://docs.google.com/document/d/1PK88LaNGhBrxGC0xFGX4tkTPUU15kqzuOhK5SzQ74Eo/edit) |
 | 테마: 방산·방위산업 | [10_테마 방산·방위산업](https://docs.google.com/document/d/1AvDpijnMrsi92m5OGg2APcg8xfniGA-jiXkiA6ygIJQ/edit) |
 | 종목: 한화에어로스페이스 | [20_종목 한화에어로스페이스](https://docs.google.com/document/d/1F2YJCAtqznASlhY9351UA0qX-81bw2hbrqQM6qrrd9I/edit) |
 | 종목: 에이유브랜즈 | [20_종목 에이유브랜즈](https://docs.google.com/document/d/1cUfOHw0OAV0Wwpi5qM4aR3BSi2-H76aV7F8L9RtK-ek/edit) |
