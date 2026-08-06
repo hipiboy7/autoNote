@@ -101,8 +101,14 @@ def check_grounding(
     """
     problems: List[str] = []
 
-    if not evidence:
-        problems.append("근거(evidence)가 비어 있습니다.")
+    # 근거가 비어 있는 것은 실패가 아니다. 이 채널에는 수치 없는 짧은 판단 코멘트가
+    # 많고("바닥에서는 단기 과열권인듯"), 그런 글의 가치는 판단 논리에 있다.
+    # 근거를 강제하면 워커가 없는 수치를 만들어 채우도록 압력을 주는 역효과가 난다.
+    # (실측: 2026-08-06 배치가 message 807·809 에서 이 조건으로 중단됐다.)
+    if not (main_claim or "").strip():
+        problems.append("핵심 주장(main_claim)이 비어 있습니다.")
+    if not (logic or "").strip():
+        problems.append("판단 논리(logic)가 비어 있습니다.")
 
     for item in evidence:
         item = (item or "").strip()

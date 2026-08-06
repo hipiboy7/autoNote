@@ -3,7 +3,7 @@ import sys
 import argparse
 import atexit
 import msvcrt
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, Dict
 
 # 라이브러리 및 서비스 모듈 import
@@ -18,6 +18,8 @@ from writer.service import ResearchWriter
 from merger.service import CommentMerger
 from reviewer.service import WeeklyReviewer
 
+from batch_health import VERDICT_OK, evaluate_batch_health
+from notify import AlertContext, BatchNotifier
 from original_docs import OriginalDocRegistry, parse_monthly_mapping
 from repair_docs import DocRepairer
 from worker_roster import load_roster
@@ -463,21 +465,55 @@ def main():
         )
     )
 
+    notifier = BatchNotifier(
+        telegram_client=telegram_client,
+        docs_client=docs_client,
+        thought_doc_id=thought_doc_id,
+        enabled=os.getenv("NOTIFY_ENABLED", "1") not in ("0", "false", "False"),
+    )
+
     # 3. Mode 스위칭 분기 처리
     if args.mode == "batch":
-        run_batch(
-            collector=collector,
-            triage=triage,
-            analyzer=analyzer,
-            writer=writer,
-            merger=merger,
-            reviewer=reviewer,
-            thought_doc_id=thought_doc_id,
-            original_doc_resolver=original_doc_registry.resolve,
-            doc_mappings=doc_mappings,
-            channel_id=args.channel,
-            base_date=now
-        )
+        # 배치 실패를 사용자가 스케줄러 이력을 뒤지지 않고도 알 수 있어야 한다.
+        # 실패하면 알린 뒤 예외를 그대로 올려 exit code 1 을 유지한다.
+        try:
+            run_batch(
+                collector=collector,
+                triage=triage,
+                analyzer=analyzer,
+                writer=writer,
+                merger=merger,
+                reviewer=reviewer,
+                thought_doc_id=thought_doc_id,
+                original_doc_resolver=original_doc_registry.resolve,
+                doc_mappings=doc_mappings,
+                channel_id=args.channel,
+                base_date=now
+            )
+        except BaseException as e:
+            state = state_manager.load_state()
+            state_manager.record_batch_result(ok=False, error=f"{type(e).__name__}: {e}")
+            notifier.notify_failure(
+                summary=f"일일 배치가 {type(e).__name__} 으로 중단되었습니다.",
+                detail=str(e),
+                context=AlertContext(
+                    mode="batch",
+                    when=now,
+                    last_message_id=state.last_message_id,
+                    hint="기록되지 않은 글은 state.json 이 갱신되지 않아 다음 실행에서 재시도됩니다.",
+                ),
+            )
+            raise
+
+        previous = state_manager.record_batch_result(ok=True)
+        if previous == "fail":
+            state = state_manager.load_state()
+            notifier.notify_recovery(
+                summary="이전 실행 실패 후 이번 배치는 정상 완료되었습니다.",
+                context=AlertContext(
+                    mode="batch", when=now, last_message_id=state.last_message_id
+                ),
+            )
     elif args.mode == "merge":
         print("Running manual Merge mode...")
         merger.merge_thoughts(thought_doc_id)
@@ -539,13 +575,28 @@ def main():
         print("Repair completed.")
     elif args.mode == "status":
         state = state_manager.load_state()
-        print("=== autoNote System Status ===")
-        print(f"Last global message ID: {state.last_message_id}")
-        print(f"Last run timestamp: {state.last_run}")
+        # state 에 저장된 시각은 UTC 다. now(=datetime.now(), naive 로컬)를 그대로 넘기면
+        # KST 기준 9시간만큼 경과 시간이 부풀려져 "방금 성공"이 "9시간 전"으로 보인다.
+        verdict, reasons = evaluate_batch_health(state, datetime.now(timezone.utc))
+
+        print("=== autoNote 배치 상태 ===")
+        print(f"판정: {verdict}")
+        for reason in reasons:
+            print(f"  - {reason}")
+        print()
+        print(f"마지막 처리 message ID : {state.last_message_id}")
+        print(f"마지막 수집 시각       : {state.last_run}")
+        print(f"마지막 배치 결과       : {state.last_batch_result or '기록 없음'}")
+        print(f"마지막 배치 시각       : {state.last_batch_at or '기록 없음'}")
+        if state.last_batch_error:
+            print(f"마지막 오류            : {state.last_batch_error[:300]}")
+        print(f"주간리뷰 마지막 주차   : {state.last_weekly_review_week or '기록 없음'}")
         ch_state = state.channels.get(args.channel)
         if ch_state:
-            print(f"Channel {args.channel} last message ID: {ch_state.last_message_id}")
-            print(f"Channel {args.channel} last run timestamp: {ch_state.last_run}")
+            print(f"채널 {args.channel} 마지막 ID : {ch_state.last_message_id}")
+
+        if verdict != VERDICT_OK:
+            sys.exit(2)
 
 if __name__ == "__main__":
     main()

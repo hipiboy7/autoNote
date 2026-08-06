@@ -20,6 +20,12 @@ class State(BaseModel):
     original_docs: Dict[str, str] = Field(default_factory=dict)
     # 문서 복구로 재생성된 문서의 매핑 교체 (테마명 -> 새 Google Docs ID)
     doc_overrides: Dict[str, str] = Field(default_factory=dict)
+    # 마지막 배치 실행 결과 — 워치독이 '배치가 아예 안 돌았는지' 판정하는 근거
+    last_batch_result: Optional[str] = None      # "ok" | "fail"
+    last_batch_at: Optional[datetime] = None
+    last_batch_error: Optional[str] = None
+    # 워치독이 같은 이상을 하루에 한 번만 통보하도록 하는 억제 키 (YYYY-MM-DD)
+    last_alert_date: Optional[str] = None
 
 class StateManager:
     def __init__(self, file_path: str):
@@ -97,6 +103,29 @@ class StateManager:
         state = self.load_state()
         state.doc_overrides[key] = doc_id
         self.save_state(state)
+
+    def record_alert_date(self, date_str: str) -> None:
+        """워치독이 알림을 보낸 날짜를 기록해 중복 통보를 막는다."""
+        state = self.load_state()
+        state.last_alert_date = date_str
+        self.save_state(state)
+
+    def record_batch_result(self, ok: bool, error: str = "") -> Optional[str]:
+        """배치 실행 결과를 기록하고 **직전** 결과를 반환한다.
+
+        직전 결과를 돌려주는 이유: 실패 → 성공으로 바뀐 시점에만 복구 알림을 보내
+        매일 성공 알림으로 사용자를 피곤하게 하지 않기 위함이다.
+        """
+        state = self.load_state()
+        previous = state.last_batch_result
+        state.last_batch_result = "ok" if ok else "fail"
+        state.last_batch_at = datetime.now(timezone.utc)
+        state.last_batch_error = "" if ok else (error or "")[:500]
+        if ok:
+            # 정상 복귀했으면 억제를 풀어, 다음에 다시 이상이 생기면 알림이 나가게 한다
+            state.last_alert_date = None
+        self.save_state(state)
+        return previous
 
 class MessageCollector:
     def __init__(self, client: TelegramClient, state_manager: StateManager):

@@ -127,7 +127,8 @@ agy --model <id> [--effort low|medium|high] --output-format json
 | 테마: 반도체사이클 | [10_테마 반도체사이클](https://docs.google.com/document/d/1UeI5DBboBk-Tedvu4G6ucOuZdxJAtkRg55N_VMV4U-s/edit) |
 | 테마: 시장심리·수급 | [10_테마 시장심리·수급](https://docs.google.com/document/d/1k2vvUvzgl6iW08MGbY9oehc2zBnKtPAi-z6OqrwaSoA/edit) |
 | 테마: 환율·매크로 | [10_테마 환율·매크로](https://docs.google.com/document/d/18lU0RmfkofcRuosdPn664x4AG8DSO12gvsDqLUi2eKE/edit) |
-| 테마: 금리 | [10_테마 금리](https://docs.google.com/document/d/1PK88LaNGhBrxGC0xFGX4tkTPUU15kqzuOhK5SzQ74Eo/edit) |
+| 테마: 금리 **(재생성본, 현행)** | [금리 (재생성)](https://docs.google.com/document/d/1C_FjVM2XWAvONXD0kwocVFsUq4SpwSHf2vxerJn6D2U/edit) |
+| 테마: 금리 (구버전-창작오염, 참조용) | [10_테마 금리](https://docs.google.com/document/d/1PK88LaNGhBrxGC0xFGX4tkTPUU15kqzuOhK5SzQ74Eo/edit) |
 | 테마: 방산·방위산업 | [10_테마 방산·방위산업](https://docs.google.com/document/d/1AvDpijnMrsi92m5OGg2APcg8xfniGA-jiXkiA6ygIJQ/edit) |
 | 종목: 한화에어로스페이스 | [20_종목 한화에어로스페이스](https://docs.google.com/document/d/1F2YJCAtqznASlhY9351UA0qX-81bw2hbrqQM6qrrd9I/edit) |
 | 종목: 에이유브랜즈 | [20_종목 에이유브랜즈](https://docs.google.com/document/d/1cUfOHw0OAV0Wwpi5qM4aR3BSi2-H76aV7F8L9RtK-ek/edit) |
@@ -146,7 +147,8 @@ agy --model <id> [--effort low|medium|high] --output-format json
 |---|---|
 | `일일 배치` | 배치 절차 실행 (스케줄러: 매일 08:50) |
 | `업데이트` | 배치 절차 즉시 실행 (누락 복구·수시 수집) |
-| `상태` | `state.json` 기준 마지막 처리 시각·ID, 처리 건수 보고 |
+| `상태` | 정상/이상 판정과 마지막 배치 결과·오류 보고 (`--mode status`) |
+| `상태 점검` | 워치독 실행 — 이상이면 알림까지 발송 (`scripts/run_health_check.bat`) |
 | `주간리뷰` | 주간리뷰 (재)생성 |
 | `백필 <from> <to>` | 메시지 ID 구간 재처리 (`state.json` 갱신하지 않음) |
 | `문서 복구 <문서명>` | 오염 블록을 원문보관에서 재분석해 새 문서로 재구성 |
@@ -183,6 +185,32 @@ python program/src/main.py --mode backfill --from-id 700 --to-id 750
    - 새 테마가 필요하면 `새 테마 제안: ○○ (이유)` 를 포함하고 사용자 승인을 받는다.
    - 월별 문서가 자동 생성됐으면 보고에 포함하고 위 매핑표를 갱신한다.
    - 근거 검증 실패로 건너뛴 글이 있으면 ID 와 사유를 보고한다.
+
+---
+
+## 7-1. 배치 이상 알림
+
+배치가 정상 동작하지 않았을 때 사용자가 스케줄러 이력을 뒤지지 않고도 알 수 있어야 한다. 잡아야 하는 이상은 두 가지이고, 감지 주체가 다르다.
+
+| 이상 유형 | 감지 주체 | 동작 |
+|---|---|---|
+| **배치가 돌았지만 실패** | `main.py` 의 batch 모드 | 예외를 잡아 `state.json` 에 `last_batch_result="fail"` 과 오류를 기록하고 알림 발송 후 예외를 재전파 (exit 1 유지) |
+| **배치가 아예 돌지 않음** (스케줄러 고장, VM 꺼짐/로그아웃, `batch.lock` 잔존) | 워치독 `scripts/check_batch_health.py` | `last_batch_at` 이 `BATCH_MAX_AGE_HOURS`(기본 26h)보다 오래되면 알림 발송 |
+
+전달 경로는 두 개를 병행하며, 하나가 죽어도 다른 하나로 간다. **알림 실패가 배치를 중단시키지 않는다.**
+
+1. **텔레그램 본인 저장 메시지** — 푸시라서 가장 빠르다 (`NOTIFY_TELEGRAM_CHAT_ID`, 기본 `me`)
+2. **`99_생각노트` 문서 배너** — 매일 여는 문서라 놓치지 않는다
+
+직접 확인할 때는 `python program/src/main.py --mode status` 를 쓴다. 종료 코드 0=정상, 2=이상.
+
+워치독은 배치와 **독립적으로** 스케줄에 걸어야 의미가 있다. 등록:
+
+```
+schtasks /create /tn "autoNote_HealthCheck" /tr "D:\autoNote\scripts\run_health_check.bat" /sc daily /st 09:40 /f
+```
+
+같은 이상을 하루에 여러 번 통보하지 않도록 `last_alert_date` 로 억제하고, 배치가 성공하면 억제를 해제한다. 실패 → 성공으로 바뀐 경우에만 복구 알림을 보낸다 (매일 성공 알림은 보내지 않는다).
 
 ---
 
