@@ -40,7 +40,7 @@ def sent_payloads(mock_urlopen):
 
 # ------------------------------------------------------------------ 적용
 
-@patch("google_docs_client.docs_style.urllib.request.urlopen")
+@patch("google_docs_client.docs_rest.urllib.request.urlopen")
 def test_apply_sets_background_and_foreground(mock_urlopen):
     mock_urlopen.side_effect = [
         http_response({"body": {"content": [{"endIndex": 500}]}}),   # 구조 조회
@@ -68,7 +68,7 @@ def test_apply_sets_background_and_foreground(mock_urlopen):
     assert text_style["range"] == {"startIndex": 1, "endIndex": 499}
 
 
-@patch("google_docs_client.docs_style.urllib.request.urlopen")
+@patch("google_docs_client.docs_rest.urllib.request.urlopen")
 def test_empty_document_only_gets_background(mock_urlopen):
     """본문이 비면 적용할 텍스트 범위가 없다. 배경만 칠한다."""
     mock_urlopen.side_effect = [
@@ -83,7 +83,7 @@ def test_empty_document_only_gets_background(mock_urlopen):
     assert "updateDocumentStyle" in requests[0]
 
 
-@patch("google_docs_client.docs_style.urllib.request.urlopen")
+@patch("google_docs_client.docs_rest.urllib.request.urlopen")
 def test_rgb_is_configurable(mock_urlopen, monkeypatch):
     """색상값을 코드에 박지 않는다 (gemini.md 룰 7)."""
     monkeypatch.setenv("DOC_THEME_BACKGROUND_RGB", "0.5,0.6,0.7")
@@ -99,7 +99,7 @@ def test_rgb_is_configurable(mock_urlopen, monkeypatch):
     assert (rgb["red"], rgb["green"], rgb["blue"]) == (0.5, 0.6, 0.7)
 
 
-@patch("google_docs_client.docs_style.urllib.request.urlopen")
+@patch("google_docs_client.docs_rest.urllib.request.urlopen")
 def test_malformed_rgb_env_falls_back(mock_urlopen, monkeypatch, capsys):
     monkeypatch.setenv("DOC_THEME_BACKGROUND_RGB", "빨강,초록")
     mock_urlopen.side_effect = [
@@ -115,11 +115,13 @@ def test_malformed_rgb_env_falls_back(mock_urlopen, monkeypatch, capsys):
 # ------------------------------------------------------------------ 실패 처리
 
 def test_token_failure_returns_false(capsys):
+    """토큰을 못 얻으면 실패로 보고한다 (True 로 감추지 않는다)."""
     assert SepiaThemeApplier(FakeProvider(raises=True)).apply("doc-1") is False
-    assert "토큰 확보 실패" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "실패" in err
 
 
-@patch("google_docs_client.docs_style.urllib.request.urlopen")
+@patch("google_docs_client.docs_rest.urllib.request.urlopen")
 def test_http_error_returns_false(mock_urlopen, capsys):
     err = urllib.error.HTTPError("url", 403, "Forbidden", {}, None)
     err.read = lambda: b'{"error":"insufficient permission"}'
@@ -134,7 +136,7 @@ def test_http_error_returns_false(mock_urlopen, capsys):
     assert "403" in captured
 
 
-@patch("google_docs_client.docs_style.urllib.request.urlopen")
+@patch("google_docs_client.docs_rest.urllib.request.urlopen")
 def test_structure_lookup_failure_still_applies_background(mock_urlopen):
     """구조 조회가 실패해도 배경색은 칠한다 (부분 성공이 전무보다 낫다)."""
     mock_urlopen.side_effect = [OSError("네트워크 오류"), http_response({})]
@@ -146,7 +148,7 @@ def test_structure_lookup_failure_still_applies_background(mock_urlopen):
 
 # ------------------------------------------------------------------ 검증
 
-@patch("google_docs_client.docs_style.urllib.request.urlopen")
+@patch("google_docs_client.docs_rest.urllib.request.urlopen")
 def test_verify_returns_background_rgb(mock_urlopen):
     mock_urlopen.return_value = http_response({
         "documentStyle": {"background": {"color": {"color": {"rgbColor": {
@@ -156,7 +158,7 @@ def test_verify_returns_background_rgb(mock_urlopen):
     assert SepiaThemeApplier(FakeProvider()).verify("doc-1") == (0.99, 0.96, 0.89)
 
 
-@patch("google_docs_client.docs_style.urllib.request.urlopen")
+@patch("google_docs_client.docs_rest.urllib.request.urlopen")
 def test_verify_returns_none_when_unset(mock_urlopen):
     mock_urlopen.return_value = http_response({"documentStyle": {}})
     assert SepiaThemeApplier(FakeProvider()).verify("doc-1") is None

@@ -4,6 +4,7 @@ import sys
 import json
 import subprocess
 from typing import Any, List, Optional
+from .docs_rest import DocsRestClient
 from .docs_style import SepiaThemeApplier
 from .google_auth import GoogleTokenProvider
 from .interface import GoogleDocsClient
@@ -20,6 +21,7 @@ class MCPGoogleDocsClient(GoogleDocsClient):
         self.process = None
         self.request_id = 1
         self._theme_applier: Optional[SepiaThemeApplier] = None
+        self._rest: Optional[DocsRestClient] = None
 
     def _ensure_connected(self):
         if self.process is not None:
@@ -309,12 +311,43 @@ class MCPGoogleDocsClient(GoogleDocsClient):
         self._send_request("tools/call", {"name": "auth.refreshToken", "arguments": {}})
 
     @property
-    def theme_applier(self) -> SepiaThemeApplier:
-        if self._theme_applier is None:
-            self._theme_applier = SepiaThemeApplier(
+    def rest(self) -> DocsRestClient:
+        if self._rest is None:
+            self._rest = DocsRestClient(
                 GoogleTokenProvider(refresh_callback=self.refresh_google_token)
             )
+        return self._rest
+
+    @property
+    def theme_applier(self) -> SepiaThemeApplier:
+        if self._theme_applier is None:
+            self._theme_applier = SepiaThemeApplier(rest=self.rest)
         return self._theme_applier
+
+    def clear_body(self, doc_id: str) -> bool:
+        """문서 본문을 비운다 (REST deleteContentRange).
+
+        MCP 는 본문 삭제를 노출하지 않는다. 재생성 내용을 원본 문서에 되쓸 때 쓴다.
+        """
+        return self.rest.clear_body(doc_id)
+
+    def trash_file(self, file_id: str) -> bool:
+        """파일을 휴지통으로 옮긴다 (되돌릴 수 있는 삭제)."""
+        try:
+            result = self._send_request(
+                "tools/call",
+                {"name": "drive.trashFile", "arguments": {"fileId": file_id}},
+            )
+        except Exception as e:
+            print(f"[MCPGoogleDocsClient] trash_file 실패 ({file_id}): {str(e)[:200]}",
+                  file=sys.stderr)
+            return False
+        body = str(result).lower()
+        if any(kw in body for kw in ("error", "failed")):
+            print(f"[MCPGoogleDocsClient] trash_file 응답에 실패 신호: {str(result)[:200]}",
+                  file=sys.stderr)
+            return False
+        return True
 
     def apply_sepia_theme(self, doc_id: str) -> bool:
         """문서 배경색과 글자색을 세피아/라이트 테마로 지정한다 (AGENTS.md 색상 통일 규칙).

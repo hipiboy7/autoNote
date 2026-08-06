@@ -22,6 +22,7 @@ from batch_health import VERDICT_OK, evaluate_batch_health
 from notify import AlertContext, BatchNotifier
 from original_docs import OriginalDocRegistry, parse_monthly_mapping
 from repair_docs import DocRepairer
+from restore_docs import DocRestorer
 from worker_roster import load_roster
 
 def parse_args():
@@ -41,7 +42,7 @@ def parse_args():
     parser.add_argument(
         "--mode", 
         type=str, 
-        choices=["batch", "merge", "review", "status", "backfill", "repair"],
+        choices=["batch", "merge", "review", "status", "backfill", "repair", "restore"],
         default="batch",
         help="배치 실행 모드 지정"
     )
@@ -380,7 +381,7 @@ def main():
     state_file = os.getenv("STATE_FILE_PATH", "./data/state.json")
 
     # 배치/리뷰 모드: 중복 실행 방지 잠금 획득
-    if args.mode in ("batch", "review", "merge", "backfill", "repair"):
+    if args.mode in ("batch", "review", "merge", "backfill", "repair", "restore"):
         lock_path = os.path.join(os.path.dirname(state_file), "batch.lock")
         if not acquire_batch_lock(lock_path):
             print(f"[{args.mode.upper()}] 다른 배치 프로세스가 이미 실행 중입니다. 종료합니다.", file=sys.stderr)
@@ -413,6 +414,9 @@ def main():
         "2026-08": os.getenv("ORIGINAL_DOC_08_ID", "1gfyz-nJZ5vtcH8enwnxcGgjjpZ6Smoqj0RvVDix5BMI"),
     }
     original_doc_mappings.update(parse_monthly_mapping(os.getenv("ORIGINAL_DOC_MONTHLY")))
+
+    # 되쓰기(restore) 모드가 원본 문서 ID 를 알아야 하므로 교체 전 값을 보관한다
+    original_doc_defaults = dict(doc_mappings)
 
     # 문서 복구로 재생성된 문서가 있으면 매핑을 교체한다 (state.json 에 기록됨)
     _bootstrap_state = StateManager(state_file).load_state()
@@ -573,6 +577,28 @@ def main():
                     f"({res.new_doc_id}). AGENTS.md 매핑표도 갱신하십시오."
                 )
         print("Repair completed.")
+    elif args.mode == "restore":
+        # 재생성본을 원본 문서로 되쓰고 문서를 하나로 정리한다.
+        # doc_overrides 를 읽으므로, 위에서 이미 doc_mappings 에 반영된 값 대신
+        # 원본 ID 를 별도로 확보해야 한다.
+        restorer = DocRestorer(docs_client=docs_client, state_manager=state_manager)
+        pending = dict(overrides)
+        targets = list(pending) if args.doc in (None, "all") else [args.doc]
+        for name in targets:
+            regenerated = pending.get(name)
+            original = original_doc_defaults.get(name)
+            if not regenerated:
+                print(f"[Restore] {name}: 재생성본이 없습니다 (doc_overrides 미등록).",
+                      file=sys.stderr)
+                continue
+            if not original:
+                print(f"[Restore] {name}: 원본 문서 ID 를 알 수 없습니다.", file=sys.stderr)
+                continue
+            if args.dry_run:
+                print(f"[Restore] (dry-run) {name}: {regenerated} → {original}")
+                continue
+            restorer.restore(name, original, regenerated)
+        print("Restore completed.")
     elif args.mode == "status":
         state = state_manager.load_state()
         # state 에 저장된 시각은 UTC 다. now(=datetime.now(), naive 로컬)를 그대로 넘기면

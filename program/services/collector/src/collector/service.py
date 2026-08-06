@@ -104,6 +104,12 @@ class StateManager:
         state.doc_overrides[key] = doc_id
         self.save_state(state)
 
+    def remove_doc_override(self, key: str) -> None:
+        """되쓰기가 끝나 원본이 현행이 되면 우회 매핑을 제거한다."""
+        state = self.load_state()
+        if state.doc_overrides.pop(key, None) is not None:
+            self.save_state(state)
+
     def record_alert_date(self, date_str: str) -> None:
         """워치독이 알림을 보낸 날짜를 기록해 중복 통보를 막는다."""
         state = self.load_state()
