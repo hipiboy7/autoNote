@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence
 
 from analyzer import ResearchAnalyzer
-from analyzer.grounding import find_fabrication_markers
+from analyzer.grounding import find_fabrication_markers, ungrounded_numbers
 from google_docs_client import GoogleDocsClient
 from writer import BLOCK_SEPARATOR, UNRECORDED, format_research_block
 
@@ -30,6 +30,34 @@ HEADER = re.compile(
 )
 THOUGHT = re.compile(r"▶\s*💭\s*내\s*생각:\s*([^\n]*)")
 SOURCE_LINE = re.compile(r"▶\s*출처:\s*[^\n]*\n")
+# 근거 섹션만 잘라낸다. 리스크도 같은 '  - ' 불릿을 쓰므로 구분해야 한다.
+EVIDENCE_SECTION = re.compile(r"▶\s*근거·데이터:(.*?)(?=▶\s*판단 논리:)", re.DOTALL)
+
+
+def extract_evidence(block_text: str) -> List[str]:
+    """블록에서 근거 항목만 뽑는다.
+
+    리스크는 원문 근거가 아니라 해석·전망이므로 숫자 대조 대상이 아니다
+    (analyzer.check_grounding 과 동일 기준).
+    """
+    section = EVIDENCE_SECTION.search(block_text)
+    if not section:
+        return []
+    return [
+        line.strip().lstrip("-").strip()
+        for line in section.group(1).split("\n")
+        if line.strip().lstrip("-").strip()
+    ]
+
+
+def ungrounded_evidence(block_text: str, source_text: str) -> List[str]:
+    """근거에 쓰였으나 원문에 없는 숫자를 담은 항목들을 반환한다."""
+    problems = []
+    for item in extract_evidence(block_text):
+        missing = ungrounded_numbers(item, source_text)
+        if missing:
+            problems.append(f"{sorted(missing)} :: {item[:60]}")
+    return problems
 
 
 @dataclass
@@ -40,6 +68,18 @@ class Block:
     text: str
     fabricated: bool = False
     thought: str = ""
+    # 원문 대조로 발견된 근거 문제 (창작 표지가 없어도 재생성 대상이 된다)
+    ungrounded: List[str] = field(default_factory=list)
+
+    @property
+    def needs_repair(self) -> bool:
+        """재생성이 필요한가.
+
+        창작 표지만으로는 부족하다. 과거 수동·폴백 기록에는 표지 없이 원문에 없는
+        수치가 들어간 블록이 있다 (실측: 시장심리·수급 r404 의 '11억 달러/EWY/25%',
+        r753 의 '640p' — 640 은 인접 메시지 r755 의 숫자였다).
+        """
+        return self.fabricated or bool(self.ungrounded)
 
 
 @dataclass
@@ -47,10 +87,15 @@ class RepairResult:
     doc_name: str
     new_doc_id: str = ""
     total_blocks: int = 0
-    fabricated: int = 0
+    fabricated: int = 0            # 창작 표지가 있는 블록
+    ungrounded_only: int = 0       # 표지는 없지만 근거가 원문과 맞지 않는 블록
     repaired: int = 0
     unrepairable: List[str] = field(default_factory=list)
     preserved_thoughts: int = 0
+
+    @property
+    def targets(self) -> int:
+        return self.fabricated + self.ungrounded_only
 
 
 def _thought_of(block_text: str) -> str:
@@ -130,29 +175,46 @@ class DocRepairer:
             raise RuntimeError(f"{doc_name}: 문서를 읽지 못했습니다 (id={doc_id}).")
 
         blocks = parse_blocks(doc_text)
-        fabricated = [b for b in blocks if b.fabricated]
-        result = RepairResult(
-            doc_name=doc_name,
-            total_blocks=len([b for b in blocks if b.identifier]),
-            fabricated=len(fabricated),
-            preserved_thoughts=len([b for b in fabricated if b.thought]),
-        )
 
-        print(
-            f"[DocRepairer] {doc_name}: 블록 {result.total_blocks}개 중 "
-            f"오염 {result.fabricated}개 (사용자 💭 보존 대상 {result.preserved_thoughts}개)"
-        )
-        if dry_run or not fabricated:
-            return result
-
+        # 원문을 먼저 확보해야 근거 대조로 재생성 대상을 판정할 수 있다.
         sources = parse_original_sources(
             [self.docs_client.read_text(d) for d in original_doc_ids]
         )
+        for block in blocks:
+            if not block.identifier:
+                continue
+            source = sources.get(block.identifier.lower())
+            if source:
+                block.ungrounded = ungrounded_evidence(block.text, source)
+
+        targets_blocks = [b for b in blocks if b.identifier and b.needs_repair]
+        result = RepairResult(
+            doc_name=doc_name,
+            total_blocks=len([b for b in blocks if b.identifier]),
+            fabricated=len([b for b in targets_blocks if b.fabricated]),
+            ungrounded_only=len(
+                [b for b in targets_blocks if not b.fabricated and b.ungrounded]
+            ),
+            preserved_thoughts=len([b for b in targets_blocks if b.thought]),
+        )
+
+        print(
+            f"[DocRepairer] {doc_name}: 블록 {result.total_blocks}개 중 재생성 대상 "
+            f"{result.targets}개 (창작표지 {result.fabricated}, 근거불일치 "
+            f"{result.ungrounded_only}) / 사용자 💭 보존 대상 {result.preserved_thoughts}개"
+        )
+        for block in targets_blocks:
+            if block.ungrounded and not block.fabricated:
+                print(f"[DocRepairer]   근거불일치 [{block.identifier}]: "
+                      f"{block.ungrounded[0][:100]}")
+
+        if dry_run or not targets_blocks:
+            return result
 
         # 재분석 대상 준비: 식별자에서 숫자만 뽑아 message_id 로 쓴다
         targets = []
         id_map: Dict[int, Block] = {}
-        for block in fabricated:
+        for block in targets_blocks:
             source = sources.get(block.identifier.lower())
             digits = re.sub(r"\D", "", block.identifier)
             if not source or not digits:
@@ -180,7 +242,7 @@ class DocRepairer:
 
             digits = re.sub(r"\D", "", block.identifier)
             report = reports.get(int(digits)) if digits else None
-            if block.fabricated and report is not None:
+            if block.needs_repair and report is not None:
                 rebuilt.append(
                     format_research_block(
                         identifier=block.identifier,
@@ -194,7 +256,7 @@ class DocRepairer:
             else:
                 # 정상 블록과 재생성 실패 블록은 원문 그대로 보존
                 rebuilt.append(f"{BLOCK_SEPARATOR}\n{block.text.strip()}")
-                if block.fabricated and block.identifier not in result.unrepairable:
+                if block.needs_repair and block.identifier not in result.unrepairable:
                     result.unrepairable.append(block.identifier)
 
         new_doc_id = self.docs_client.create_doc(

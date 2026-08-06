@@ -1,6 +1,12 @@
 import pytest
 from analyzer import ResearchReport
-from repair_docs import DocRepairer, parse_blocks, parse_original_sources
+from repair_docs import (
+    DocRepairer,
+    extract_evidence,
+    parse_blocks,
+    parse_original_sources,
+    ungrounded_evidence,
+)
 
 SEP = "━━━━━━━━━━━━━━━━━━"
 
@@ -221,3 +227,89 @@ def test_missing_document_raises():
     client = FakeDocsClient({})
     with pytest.raises(RuntimeError):
         DocRepairer(client, FakeAnalyzer()).repair("금리", "nope", ["orig"])
+
+
+# ------------------------------------------- 근거 불일치 블록도 재생성 대상
+
+# 창작 표지는 없지만 원문에 없는 숫자를 근거로 쓴 블록.
+# 실측 사례: 시장심리·수급 r753 의 '640p' 는 인접 메시지 r755 의 숫자였다.
+UNGROUNDED = (
+    f"{SEP}\n"
+    "■ [r700] 2026-07-20 | 코스닥 사이드카\n"
+    "▶ 출처: 피터케이 채널\n"
+    "▶ 핵심 주장: 단기 과열권 판단\n"
+    "▶ 근거·데이터:\n  - 바닥(640p) 대비 급반등\n"
+    "▶ 판단 논리: 사람이 쓴 논리\n"
+    "▶ 리스크·반대 시나리오:\n  - 2028년 실적 불확실\n"
+    "▶ 💭 내 생각: 미기록 [r700]\n"
+    "▶ ❓ 생각해볼 질문: 질문?\n"
+)
+
+
+def test_extract_evidence_excludes_risks():
+    """근거와 리스크가 같은 불릿을 쓴다. 리스크는 숫자 대조 대상이 아니다."""
+    assert extract_evidence(UNGROUNDED) == ["바닥(640p) 대비 급반등"]
+
+
+def test_ungrounded_evidence_detects_numbers_absent_from_source():
+    problems = ungrounded_evidence(UNGROUNDED, ORIGINAL_ARCHIVE)
+    assert len(problems) == 1
+    assert "640" in problems[0]
+
+    # 리스크의 2028 은 검사하지 않으므로 문제로 잡히지 않는다
+    assert not any("2028" in p for p in problems)
+
+
+def test_block_without_marker_but_ungrounded_is_repaired():
+    """창작 표지만으로는 부족하다. 과거 수동 기록의 근거 오류도 재생성해야 한다."""
+    client = FakeDocsClient({"theme": UNGROUNDED, "orig": ORIGINAL_ARCHIVE})
+    analyzer = FakeAnalyzer()
+
+    res = DocRepairer(client, analyzer).repair("금리", "theme", ["orig"])
+
+    assert res.fabricated == 0
+    assert res.ungrounded_only == 1
+    assert res.targets == 1
+    assert res.repaired == 1
+    assert analyzer.requested == [700]
+    assert "640p" not in client.read_text(res.new_doc_id)
+
+
+def test_dry_run_reports_both_categories():
+    client = FakeDocsClient({
+        "theme": FABRICATED + UNGROUNDED.replace("[r700]", "[r701]"),
+        "orig": ORIGINAL_ARCHIVE,
+    })
+
+    res = DocRepairer(client, FakeAnalyzer()).repair(
+        "금리", "theme", ["orig"], dry_run=True
+    )
+
+    assert res.fabricated == 1
+    assert res.ungrounded_only == 1
+    assert res.targets == 2
+    assert client.created == []
+
+
+def test_grounded_block_is_left_alone():
+    """근거가 원문과 맞는 정상 블록은 재분석하지 않는다 (토큰 낭비 방지)."""
+    client = FakeDocsClient({"theme": GENUINE, "orig": ORIGINAL_ARCHIVE})
+    analyzer = FakeAnalyzer()
+
+    res = DocRepairer(client, analyzer).repair("금리", "theme", ["orig"])
+
+    assert res.targets == 0
+    assert analyzer.requested == []
+    assert res.new_doc_id == ""
+
+
+def test_block_without_source_is_not_judged_ungrounded():
+    """원문보관에 원문이 없으면 근거 대조를 할 수 없다. 함부로 재생성하지 않는다."""
+    orphan = UNGROUNDED.replace("[r700]", "[r999]")
+    client = FakeDocsClient({"theme": orphan, "orig": ORIGINAL_ARCHIVE})
+    analyzer = FakeAnalyzer()
+
+    res = DocRepairer(client, analyzer).repair("금리", "theme", ["orig"])
+
+    assert res.targets == 0
+    assert analyzer.requested == []

@@ -63,15 +63,33 @@ def extract_numbers(
     return numbers
 
 
+def _year_aliases(numbers: Set[str]) -> Set[str]:
+    """연도의 두 자리 표기를 함께 허용한다 ('2026년' 원문 ↔ '26년 3분기' 근거)."""
+    aliases = set()
+    for token in numbers:
+        if len(token) == 4 and token[:2] in ("19", "20") and token.isdigit():
+            aliases.add(token[2:])
+    return aliases
+
+
 def ungrounded_numbers(claim_text: str, source_text: str) -> Set[str]:
     """근거 문장에 있으나 원문에 없는 숫자를 반환한다.
 
-    원문 쪽은 관대하게(부분 숫자열까지), 근거 쪽은 쓰인 그대로 비교한다.
-    창작을 잡는 것이 목적이므로 오탐(정상 글을 버리는 것)을 더 경계한다.
+    원문 쪽은 관대하게, 근거 쪽은 쓰인 그대로 비교한다. 창작을 잡는 것이 목적이므로
+    오탐(정상 글을 버리는 것)을 더 경계한다. 그래서 두 가지를 완화한다.
+
+    * **한 자리 숫자는 검사하지 않는다.** '2분기', '3일연속', '2차' 처럼 수량·서수
+      표현이 대부분이고, 창작된 수치는 거의 항상 두 자리 이상이다
+      (실측 사례: 'LTA 비중 70%', '유가 100달러', '11억 달러', '640p').
+    * **연도의 두 자리 표기를 허용한다.** 원문 '2026년' 과 근거 '26년' 은 같은 값이다.
     """
     source = extract_numbers(source_text, expand=True)
+    source |= _year_aliases(source)
     claimed = extract_numbers(claim_text, strip_list_prefix=True)
-    return {n for n in claimed if n not in source}
+    return {
+        n for n in claimed
+        if n not in source and len(n.replace(".", "")) > 1
+    }
 
 
 def find_fabrication_markers(texts: Iterable[str]) -> List[str]:

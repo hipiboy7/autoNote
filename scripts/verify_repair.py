@@ -33,7 +33,12 @@ from analyzer.grounding import (
 )
 from collector.service import StateManager
 from google_docs_client.mcp_client import MCPGoogleDocsClient
-from repair_docs import parse_blocks, parse_original_sources
+from repair_docs import (
+    extract_evidence,
+    parse_blocks,
+    parse_original_sources,
+    ungrounded_evidence,
+)
 
 # 구버전(오염) 문서 ID — main.py 의 기본 매핑과 동일
 OLD_DOCS = {
@@ -50,27 +55,6 @@ ORIGINALS = [
     "17b8iLt_KxjWZX7On9hnPXCLZtm6fpT8GBgYb_X85PHY",  # 2026-07
     "1gfyz-nJZ5vtcH8enwnxcGgjjpZ6Smoqj0RvVDix5BMI",  # 2026-08
 ]
-
-EVIDENCE_SECTION = re.compile(
-    r"▶\s*근거·데이터:(.*?)(?=▶\s*판단 논리:)", re.DOTALL
-)
-
-
-def extract_evidence(block_text: str) -> list:
-    """근거 항목만 뽑는다.
-
-    근거와 리스크가 같은 '  - ' 불릿을 쓰므로 구분해야 한다. 리스크는 원문 근거가
-    아니라 해석·전망이므로 숫자 대조 대상이 아니다 (analyzer 도 동일 기준).
-    """
-    section = EVIDENCE_SECTION.search(block_text)
-    if not section:
-        return []
-    return [
-        line.strip().lstrip("-").strip()
-        for line in section.group(1).split("\n")
-        if line.strip().lstrip("-").strip()
-    ]
-
 
 overrides = getattr(StateManager("./data/state.json").load_state(), "doc_overrides", {}) or {}
 targets = sys.argv[1:] or sorted(overrides)
@@ -107,9 +91,13 @@ try:
         # 복구는 '창작 표지가 있던 블록' 만 재생성하고 나머지는 원문 그대로 옮긴다.
         # 보존 블록의 근거 문제는 과거 수동/폴백 기록에서 비롯한 별개 사안이므로,
         # 재생성 품질 판정에 섞으면 안 된다.
-        regenerated_ids = {
-            b.identifier for b in old_blocks if find_fabrication_markers([b.text])
-        }
+        regenerated_ids = set()
+        for b in old_blocks:
+            src = sources.get(b.identifier.lower())
+            if find_fabrication_markers([b.text]) or (
+                src and ungrounded_evidence(b.text, src)
+            ):
+                regenerated_ids.add(b.identifier)
 
         violations = []          # 재생성 블록의 위반 (복구 품질 문제)
         legacy_issues = []       # 보존 블록의 위반 (기존 기록 문제)
