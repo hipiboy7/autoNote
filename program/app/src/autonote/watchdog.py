@@ -12,8 +12,8 @@ import sys
 from datetime import datetime, timezone
 from typing import Optional
 
-from batch_health import VERDICT_OK, evaluate_batch_health
-from notify import AlertContext, BatchNotifier
+from .batch_health import VERDICT_OK, evaluate_batch_health
+from .notify import AlertContext, BatchNotifier
 
 
 def run_watchdog(

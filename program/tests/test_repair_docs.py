@@ -1,6 +1,6 @@
 import pytest
 from analyzer import ResearchReport
-from repair_docs import (
+from autonote.repair_docs import (
     DocRepairer,
     extract_evidence,
     parse_blocks,

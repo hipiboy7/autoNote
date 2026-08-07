@@ -26,24 +26,23 @@ r811  UTC 08-05 23:51  =  KST 08-06 08:51  →  문서에 '2026-08-05'
 
 ```powershell
 cd D:\autoNote
-$env:PYTHONPATH="program/src;program/libs/agy-gateway/src;program/libs/google-docs-client/src;program/libs/telegram-client/src;program/libs/llm-gateway/src;program/services/analyzer/src;program/services/collector/src;program/services/merger/src;program/services/reviewer/src;program/services/writer/src"
 $env:PYTHONIOENCODING="utf-8"
 
 # 1) 반드시 먼저 집계만 (문서를 바꾸지 않는다)
-python scripts\relabel_dates_kst.py --dry-run --limit 1000
+python ops\migrations\relabel_dates_kst.py --dry-run --limit 1000
 
 # 2) 작은 문서부터 하나씩 확인하며 진행
-python scripts\relabel_dates_kst.py 에이피알 --limit 1000
-python scripts\relabel_dates_kst.py 한화에어로스페이스 --limit 1000
-python scripts\relabel_dates_kst.py 방산·방위산업 --limit 1000
-python scripts\relabel_dates_kst.py 금리 --limit 1000
+python ops\migrations\relabel_dates_kst.py 에이피알 --limit 1000
+python ops\migrations\relabel_dates_kst.py 한화에어로스페이스 --limit 1000
+python ops\migrations\relabel_dates_kst.py 방산·방위산업 --limit 1000
+python ops\migrations\relabel_dates_kst.py 금리 --limit 1000
 
 # 3) 큰 문서
-python scripts\relabel_dates_kst.py 환율·매크로 --limit 1000
-python scripts\relabel_dates_kst.py "시장심리·수급" --limit 1000
-python scripts\relabel_dates_kst.py "원문보관 2026-07" --limit 1000
-python scripts\relabel_dates_kst.py "원문보관 2026-08" --limit 1000
-python scripts\relabel_dates_kst.py 반도체사이클 --limit 1000
+python ops\migrations\relabel_dates_kst.py 환율·매크로 --limit 1000
+python ops\migrations\relabel_dates_kst.py "시장심리·수급" --limit 1000
+python ops\migrations\relabel_dates_kst.py "원문보관 2026-07" --limit 1000
+python ops\migrations\relabel_dates_kst.py "원문보관 2026-08" --limit 1000
+python ops\migrations\relabel_dates_kst.py 반도체사이클 --limit 1000
 ```
 
 **한 문서씩 실행하고 매번 결과를 확인할 것.** 스크립트는 문서 본문을 통째로 재작성하므로
@@ -78,6 +77,6 @@ python scripts\relabel_dates_kst.py 반도체사이클 --limit 1000
 ## 완료 후
 
 1. 보정 건수와 잔존·미확보 건수를 사용자에게 보고한다.
-2. `python scripts\verify_repair.py` 는 `doc_overrides` 기반이라 이 작업과는 무관하다.
+2. `python ops\tools\verify_repair.py` 는 `doc_overrides` 기반이라 이 작업과는 무관하다.
    대신 `--dry-run` 을 다시 돌려 대상이 0건이 되었는지 확인한다.
 3. `working_docs/YYYY-MM-DD_작업요약.md` 에 보정 이력을 남긴다.

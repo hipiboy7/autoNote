@@ -15,16 +15,6 @@ import sys
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-# collector 패키지가 triage(→ agy_gateway)를 함께 노출하므로 라이브러리 경로도 필요하다.
-for _rel in (
-    os.path.join("program", "src"),
-    os.path.join("program", "libs", "agy-gateway", "src"),
-    os.path.join("program", "libs", "telegram-client", "src"),
-    os.path.join("program", "libs", "google-docs-client", "src"),
-    os.path.join("program", "services", "collector", "src"),
-):
-    sys.path.insert(0, os.path.join(_ROOT, _rel))
-
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 if hasattr(sys.stderr, "reconfigure"):
@@ -34,9 +24,9 @@ if hasattr(sys.stderr, "reconfigure"):
 def main() -> int:
     from collector.service import StateManager
     from google_docs_client.mcp_client import MCPGoogleDocsClient
-    from notify import BatchNotifier
+    from autonote.notify import BatchNotifier
     from telegram_client.mcp_client import MCPTelegramClient
-    from watchdog import run_watchdog
+    from autonote.watchdog import run_watchdog
 
     state_file = os.getenv("STATE_FILE_PATH", "./data/state.json")
     thought_doc_id = os.getenv(

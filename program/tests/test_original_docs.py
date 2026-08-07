@@ -1,7 +1,7 @@
 import pytest
 from datetime import datetime
 
-from original_docs import (
+from autonote.original_docs import (
     OriginalDocRegistry,
     OriginalDocResolutionError,
     parse_monthly_mapping,

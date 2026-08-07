@@ -7,7 +7,7 @@ cd /d D:\autoNote
 set PYTHONIOENCODING=utf-8
 
 echo autoNote 배치 상태 점검 중...
-python D:\autoNote\scripts\check_batch_health.py
+python D:\autoNote\cli\check_batch_health.py
 
 rem 0=정상 1=이상 알림 발송 2=오늘 이미 알림 3=점검 실패
 if %ERRORLEVEL% EQU 0 echo [OK] 배치 정상

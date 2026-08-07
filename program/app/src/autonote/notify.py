@@ -5,7 +5,7 @@
 
 두 갈래의 '정상 동작 안 함' 을 모두 잡아야 한다.
   A. 배치가 돌았지만 실패했다  → main 이 예외를 잡아 이 모듈로 알린다.
-  B. 배치가 아예 돌지 않았다    → 별도 워치독(scripts/check_batch_health.py)이
+  B. 배치가 아예 돌지 않았다    → 별도 워치독(cli/check_batch_health.py)이
      state.json 의 마지막 성공 시각을 보고 알린다. 배치 내부 알림으로는 잡을 수 없다.
 
 전달 경로는 두 개를 병행한다.
@@ -118,7 +118,7 @@ class BatchNotifier:
         lines += [
             "",
             "조치: D:\\autoNote 에서 아래를 실행해 상태를 확인하십시오.",
-            "  python program/src/main.py --mode status",
+            "  python -m autonote.main --mode status",
             "재실행: scripts\\run_daily_batch.bat",
         ]
         if context and context.hint:

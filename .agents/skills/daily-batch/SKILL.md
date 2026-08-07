@@ -15,16 +15,15 @@ description: >-
 ## 실행
 
 ```powershell
-D:\autoNote\scripts\run_daily_batch.bat
+D:\autoNote\cli\run_daily_batch.bat
 ```
 
-개별 모드가 필요하면 `PYTHONPATH` 를 잡고 직접 호출한다. **`program/libs/agy-gateway/src` 가 빠지면 import 오류로 죽는다.**
+개별 모드는 아래처럼 직접 호출한다. 패키지가 editable 설치되어 있어 `PYTHONPATH` 설정이 필요하지 않다.
 
 ```powershell
 cd D:\autoNote
-$env:PYTHONPATH="program/src;program/libs/agy-gateway/src;program/libs/google-docs-client/src;program/libs/telegram-client/src;program/libs/llm-gateway/src;program/services/analyzer/src;program/services/collector/src;program/services/merger/src;program/services/reviewer/src;program/services/writer/src"
 $env:PYTHONIOENCODING="utf-8"
-python program/src/main.py --mode batch     # 또는 status / review / merge / backfill
+python -m autonote.main --mode batch     # 또는 status / review / merge / backfill
 ```
 
 ## 파이프라인 단계와 정상 로그
@@ -62,13 +61,13 @@ LLM 호출은 Step 3(판별)과 Step 4(추출)에서 **배치로만** 일어난�
 배치 실패는 자동으로 통보된다. 사용자가 "배치 돌았어?" 라고 물으면 아래를 실행해 답한다.
 
 ```powershell
-python program/src/main.py --mode status     # 종료코드 0=정상, 2=이상
+python -m autonote.main --mode status     # 종료코드 0=정상, 2=이상
 ```
 
 출력의 `판정` 줄이 결론이다. `마지막 배치 결과`(ok/fail), `마지막 배치 시각`, `마지막 오류` 를 함께 보고한다.
 
 - 배치가 **돌았지만 실패**하면 `main.py` 가 알림을 보내고 `state.json` 에 원인을 남긴다.
-- 배치가 **아예 안 돈 경우**(스케줄러 고장, VM 꺼짐, `batch.lock` 잔존)는 배치 내부에서 알 수 없으므로 워치독(`scripts/run_health_check.bat`, 매일 09:40)이 잡는다.
+- 배치가 **아예 안 돈 경우**(스케줄러 고장, VM 꺼짐, `batch.lock` 잔존)는 배치 내부에서 알 수 없으므로 워치독(`cli/run_health_check.bat`, 매일 09:40)이 잡는다.
 - 알림은 텔레그램 본인 저장 메시지 + `99_생각노트` 배너 두 경로로 나간다.
 
 **주의: 백그라운드 실행의 종료 코드만 믿지 말 것.** 로그 리다이렉트 실패 등으로 프로그램이 시작조차 못 했는데 래퍼가 성공으로 보이는 경우가 있다. 반드시 로그 내용과 `--mode status` 로 교차 확인한다.

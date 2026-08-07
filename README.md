@@ -8,28 +8,58 @@
 ## 🏗️ 전체 구조
 
 ```
-D:\autoNote\
-├── AGENTS.md               ← 에이전트의 전반적인 동작 규칙
-├── README.md               ← 지금 읽고 있는 종합 가이드 및 시스템 매뉴얼
-├── data\
-│   ├── state.json          ← 마지막으로 처리한 메시지 ID & 실행 시각 기록
-│   └── extracted_messages.json
-├── program\                ← ⭐ 신규 하이브리드 배치 프로그램 영역
-│   ├── gemini.md           ← 본 프로젝트의 공식 협업 룰 & 가이드 (작업 규칙)
-│   ├── pyproject.toml      ← uv workspace 패키지 관리
-│   ├── src/                ← 하이브리드 제어 소스 코드
-│   ├── tests/              ← TDD 유닛 테스트 코드
-│   └── docs/               ← 요구사항, 설계서, 테스트결과서 산출물 위치
-├── scripts\
-│   ├── startup_agy.bat     ← VM 로그인 시 자동으로 agy를 기동하는 스크립트
-│   ├── run_daily_batch.bat ← 매일 8:50 AM에 작업 스케줄러가 실행하는 배치 파일
-│   ├── telegram_extractor.py
-│   ├── docs_batch_uploader.py
-│   ├── docs_formatter.py
-│   ├── chunk_splitter.py
-│   └── decrypt_token.js
-├── telegram-mcp\           ← 텔레그램 MCP 서버 설정
-└── working_docs\           ← 작업 히스토리 (에이전트 세션별 작업 요약 기록)
+D:utoNote├── AGENTS.md               ← 운영 규칙 (에이전트가 먼저 읽는 문서)
+├── antigravity.md          ← 문서 위치 안내 (규칙 정본은 program/gemini.md)
+├── README.md               ← 지금 읽고 있는 시스템 매뉴얼
+├── sample.env              ← 환경변수 목록 (cp sample.env .env)
+│
+├── program\                ← 애플리케이션 (uv/pip workspace)
+│   ├── gemini.md           ← 개발 그라운드 룰 정본
+│   ├── app/                ← autonote 패키지 (배치·복구·알림·워치독)
+│   ├── libs/               ← 공유 추상화 (agy-gateway, google-docs-client, telegram-client)
+│   ├── services/           ← 도메인 서비스 (collector, analyzer, writer, merger, reviewer)
+│   └── tests/              ← 앱 계층 테스트
+│
+├── cli\                    ← 실행 진입점
+│   ├── run_daily_batch.bat     매일 08:50 스케줄러가 실행
+│   ├── run_health_check.bat    매일 09:40 배치 이상 감시
+│   ├── run_backfill.bat        구간 재처리
+│   ├── startup_agy.bat         VM 로그인 시 agy 기동
+│   └── check_batch_health.py   워치독 본체
+│
+├── ops\                    ← 운영 스크립트
+│   ├── tools/              반복 사용 (sync_to_drive, verify_repair, decrypt_token)
+│   ├── migrations/         일회성 보정 (relabel_dates_kst, dedupe_archive 등)
+│   └── archive/            현 배선에서 미사용 (삭제 전 보관)
+│
+├── docs\                   ← 산출물
+│   ├── 00-신규프로젝트-설계교훈.md   ← 다른 프로젝트에도 쓰는 교훈 정리
+│   └── P01~P06_*.md                Phase 산출물
+│
+├── data\                   ← 런타임 상태 (git 제외)
+│   ├── state.json          마지막 처리 ID·배치 결과·문서 매핑
+│   └── agy_usage.jsonl     워커 토큰 사용량 누적
+│
+├── .agents\skills\         ← agy 런북 (daily-batch, doc-repair, date-relabel)
+├── telegram-mcp\           ← 텔레그램 MCP 서버 (vendored, git 제외)
+└── working_docs\           ← 세션별 작업 기록
+```
+
+### 실행 방법
+
+패키지가 editable 설치되어 있어 **`PYTHONPATH` 설정이 필요하지 않습니다.**
+
+```powershell
+python -m autonote.main --mode status     # 상태 판정 (0=정상, 2=이상)
+python -m autonote.main --mode batch      # 일일 배치
+D:utoNote\cliun_daily_batch.bat       # 스케줄러가 실행하는 것과 동일
+```
+
+설치가 풀렸다면 (새 환경·파이썬 재설치 후):
+
+```powershell
+cd D:utoNote
+foreach ($m in @("program/libs/agy-gateway","program/libs/google-docs-client","program/libs/telegram-client","program/libs/llm-gateway","program/services/analyzer","program/services/collector","program/services/merger","program/services/reviewer","program/services/writer","program/app")) { pip install -e $m --no-deps }
 ```
 
 ---
@@ -106,7 +136,7 @@ dir "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\autoNote_agy.lnk
 $WshShell = New-Object -ComObject WScript.Shell
 $Shortcut = $WshShell.CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\autoNote_agy.lnk")
 $Shortcut.TargetPath = "cmd.exe"
-$Shortcut.Arguments = '/k "D:\autoNote\scripts\startup_agy.bat"'
+$Shortcut.Arguments = '/k "D:\autoNote\cli\startup_agy.bat"'
 $Shortcut.WorkingDirectory = "D:\autoNote"
 $Shortcut.Save()
 ```
@@ -118,4 +148,4 @@ schtasks /run /tn "autoNote_DailyBatch"
 ```
 
 ---
-*마지막 업데이트: 2026-07-15 (하이브리드 배치 및 생각노트 자동 병합 시스템 스펙 반영)*
+*마지막 업데이트: 2026-08-07 (디렉토리 구조 정리, editable 설치로 PYTHONPATH 제거)*

@@ -16,13 +16,13 @@ from writer.service import ResearchWriter
 from merger.service import CommentMerger
 from reviewer.service import WeeklyReviewer
 
-from batch_health import VERDICT_OK, evaluate_batch_health
-from batch_lock import require_lock
-from notify import AlertContext, BatchNotifier
-from original_docs import OriginalDocRegistry, parse_monthly_mapping
-from repair_docs import DocRepairer
-from restore_docs import DocRestorer
-from worker_roster import load_roster
+from .batch_health import VERDICT_OK, evaluate_batch_health
+from .batch_lock import require_lock
+from .notify import AlertContext, BatchNotifier
+from .original_docs import OriginalDocRegistry, parse_monthly_mapping
+from .repair_docs import DocRepairer
+from .restore_docs import DocRestorer
+from .worker_roster import load_roster
 from writer import local_now
 
 def parse_args():

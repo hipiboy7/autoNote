@@ -1,14 +1,14 @@
 from datetime import datetime, timedelta, timezone
 
-from batch_health import (
+from autonote.batch_health import (
     VERDICT_FAILED,
     VERDICT_OK,
     VERDICT_STALE,
     VERDICT_UNKNOWN,
     evaluate_batch_health,
 )
-from notify import BatchNotifier
-from watchdog import run_watchdog
+from autonote.notify import BatchNotifier
+from autonote.watchdog import run_watchdog
 
 NOW = datetime(2026, 8, 6, 9, 40, tzinfo=timezone.utc)
 

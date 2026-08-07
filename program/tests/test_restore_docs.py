@@ -1,5 +1,5 @@
 import pytest
-from restore_docs import CHUNK_CHARS, DocRestorer
+from autonote.restore_docs import CHUNK_CHARS, DocRestorer
 
 SEP = "━━━━━━━━━━━━━━━━━━"
 

@@ -12,10 +12,10 @@
   4. 재작성 후 남은 불일치 수를 다시 세어 검증한다. 잔존이 있으면 실패로 보고한다.
 
 사용법:
-    python scripts/relabel_dates_kst.py --dry-run          # 대상만 집계
-    python scripts/relabel_dates_kst.py                    # 전체 문서 보정
-    python scripts/relabel_dates_kst.py 원문보관 금리         # 특정 문서만
-    python scripts/relabel_dates_kst.py --limit 500        # 텔레그램 조회 범위 확대
+    python ops/migrations/relabel_dates_kst.py --dry-run          # 대상만 집계
+    python ops/migrations/relabel_dates_kst.py                    # 전체 문서 보정
+    python ops/migrations/relabel_dates_kst.py 원문보관 금리         # 특정 문서만
+    python ops/migrations/relabel_dates_kst.py --limit 500        # 텔레그램 조회 범위 확대
 
 종료 코드: 0 성공(또는 대상 없음) / 1 일부 실패
 """
@@ -28,22 +28,12 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-for _rel in (
-    os.path.join("program", "src"),
-    os.path.join("program", "libs", "agy-gateway", "src"),
-    os.path.join("program", "libs", "google-docs-client", "src"),
-    os.path.join("program", "libs", "telegram-client", "src"),
-    os.path.join("program", "services", "analyzer", "src"),
-    os.path.join("program", "services", "collector", "src"),
-    os.path.join("program", "services", "writer", "src"),
-):
-    sys.path.insert(0, os.path.join(_ROOT, _rel))
 
 os.chdir(_ROOT)
 
-from batch_lock import require_lock
+from autonote.batch_lock import require_lock
 from google_docs_client.mcp_client import MCPGoogleDocsClient
-from restore_docs import rewrite_document
+from autonote.restore_docs import rewrite_document
 from telegram_client.mcp_client import MCPTelegramClient
 from writer import local_date_str
 

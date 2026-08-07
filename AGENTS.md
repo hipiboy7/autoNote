@@ -147,7 +147,7 @@ agy --model <id> [--effort low|medium|high] --output-format json
 | `일일 배치` | 배치 절차 실행 (스케줄러: 매일 08:50) |
 | `업데이트` | 배치 절차 즉시 실행 (누락 복구·수시 수집) |
 | `상태` | 정상/이상 판정과 마지막 배치 결과·오류 보고 (`--mode status`) |
-| `상태 점검` | 워치독 실행 — 이상이면 알림까지 발송 (`scripts/run_health_check.bat`) |
+| `상태 점검` | 워치독 실행 — 이상이면 알림까지 발송 (`cli/run_health_check.bat`) |
 | `주간리뷰` | 주간리뷰 (재)생성 |
 | `백필 <from> <to>` | 메시지 ID 구간 재처리 (`state.json` 갱신하지 않음) |
 | `문서 복구 <문서명>` | 오염 블록을 원문보관에서 재분석해 새 문서로 재구성 |
@@ -158,15 +158,14 @@ agy --model <id> [--effort low|medium|high] --output-format json
 
 ```powershell
 # 일일 배치 (스케줄러가 호출하는 것과 동일)
-D:\autoNote\scripts\run_daily_batch.bat
+D:\autoNote\cli\run_daily_batch.bat
 
 # 개별 모드
-$env:PYTHONPATH="program/src;program/libs/agy-gateway/src;program/libs/google-docs-client/src;program/libs/telegram-client/src;program/libs/llm-gateway/src;program/services/analyzer/src;program/services/collector/src;program/services/merger/src;program/services/reviewer/src;program/services/writer/src"
-python program/src/main.py --mode status
-python program/src/main.py --mode batch
-python program/src/main.py --mode review
-python program/src/main.py --mode merge
-python program/src/main.py --mode backfill --from-id 700 --to-id 750
+python -m autonote.main --mode status
+python -m autonote.main --mode batch
+python -m autonote.main --mode review
+python -m autonote.main --mode merge
+python -m autonote.main --mode backfill --from-id 700 --to-id 750
 ```
 
 ---
@@ -194,19 +193,19 @@ python program/src/main.py --mode backfill --from-id 700 --to-id 750
 | 이상 유형 | 감지 주체 | 동작 |
 |---|---|---|
 | **배치가 돌았지만 실패** | `main.py` 의 batch 모드 | 예외를 잡아 `state.json` 에 `last_batch_result="fail"` 과 오류를 기록하고 알림 발송 후 예외를 재전파 (exit 1 유지) |
-| **배치가 아예 돌지 않음** (스케줄러 고장, VM 꺼짐/로그아웃, `batch.lock` 잔존) | 워치독 `scripts/check_batch_health.py` | `last_batch_at` 이 `BATCH_MAX_AGE_HOURS`(기본 26h)보다 오래되면 알림 발송 |
+| **배치가 아예 돌지 않음** (스케줄러 고장, VM 꺼짐/로그아웃, `batch.lock` 잔존) | 워치독 `cli/check_batch_health.py` | `last_batch_at` 이 `BATCH_MAX_AGE_HOURS`(기본 26h)보다 오래되면 알림 발송 |
 
 전달 경로는 두 개를 병행하며, 하나가 죽어도 다른 하나로 간다. **알림 실패가 배치를 중단시키지 않는다.**
 
 1. **텔레그램 본인 저장 메시지** — 푸시라서 가장 빠르다 (`NOTIFY_TELEGRAM_CHAT_ID`, 기본 `me`)
 2. **`99_생각노트` 문서 배너** — 매일 여는 문서라 놓치지 않는다
 
-직접 확인할 때는 `python program/src/main.py --mode status` 를 쓴다. 종료 코드 0=정상, 2=이상.
+직접 확인할 때는 `python -m autonote.main --mode status` 를 쓴다. 종료 코드 0=정상, 2=이상.
 
 워치독은 배치와 **독립적으로** 스케줄에 걸어야 의미가 있다. 등록:
 
 ```
-schtasks /create /tn "autoNote_HealthCheck" /tr "D:\autoNote\scripts\run_health_check.bat" /sc daily /st 09:40 /f
+schtasks /create /tn "autoNote_HealthCheck" /tr "D:\autoNote\cli\run_health_check.bat" /sc daily /st 09:40 /f
 ```
 
 같은 이상을 하루에 여러 번 통보하지 않도록 `last_alert_date` 로 억제하고, 배치가 성공하면 억제를 해제한다. 실패 → 성공으로 바뀐 경우에만 복구 알림을 보낸다 (매일 성공 알림은 보내지 않는다).
@@ -260,7 +259,7 @@ schtasks /create /tn "autoNote_HealthCheck" /tr "D:\autoNote\scripts\run_health_
 - **종목 추천·매매 판단을 생성하지 않는다.** 이것은 학습 시스템이다.
 - 사용자의 읽기·생각 기록을 대신하지 않는다. 💭 는 사용자의 몫이다.
 - **Telethon 세션 파일과 API 자격증명을 출력·전송하지 않는다.**
-  - Google Drive 동기화 포함: `scripts/sync_to_drive.py` 는 `.env` 계열, `telegram-mcp/`, 세션·키 파일을 제외한다(`is_excluded_file`). 이 제외 규칙을 완화하지 않는다.
+  - Google Drive 동기화 포함: `ops/tools/sync_to_drive.py` 는 `.env` 계열, `telegram-mcp/`, 세션·키 파일을 제외한다(`is_excluded_file`). 이 제외 규칙을 완화하지 않는다.
   - 실값이 담긴 `.env` 는 커밋 금지. 키 목록은 `sample.env` 로만 관리한다.
-- **배치 실행 원칙**: 에이전트가 자체 판단으로 Google Workspace 툴을 직접 호출해 문서를 임의로 작성하는 것을 금지한다. 반드시 `program/src/main.py` 를 `PYTHONPATH` 를 올바르게 잡아 기동하는 방식으로 실행하고 `state.json` 일관성을 유지한다.
+- **배치 실행 원칙**: 에이전트가 자체 판단으로 Google Workspace 툴을 직접 호출해 문서를 임의로 작성하는 것을 금지한다. 반드시 `python -m autonote.main` 을 기동하는 방식으로 실행하고 `state.json` 일관성을 유지한다.
 - 작업 세션 종료 시 `./working_docs/YYYY-MM-DD_작업요약.md` 에 히스토리를 남긴다. 변경 내역, 미완료 작업, 다음 에이전트가 알아야 할 맥락을 포함할 것.

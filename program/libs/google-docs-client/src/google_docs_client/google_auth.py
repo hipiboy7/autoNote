@@ -13,7 +13,7 @@ import sys
 import time
 from typing import Callable, Optional
 
-DEFAULT_DECRYPT_SCRIPT = r"D:\autoNote\scripts\decrypt_token.js"
+DEFAULT_DECRYPT_SCRIPT = r"D:\autoNote\ops\tools\decrypt_token.js"
 DEFAULT_ACCOUNT = "main-account"
 # 만료 직전 토큰으로 호출하면 요청 도중 만료될 수 있어 여유를 둔다
 DEFAULT_SKEW_SECONDS = 120

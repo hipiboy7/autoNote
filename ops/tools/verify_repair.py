@@ -13,16 +13,6 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-for _rel in (
-    os.path.join("program", "src"),
-    os.path.join("program", "libs", "agy-gateway", "src"),
-    os.path.join("program", "libs", "google-docs-client", "src"),
-    os.path.join("program", "libs", "telegram-client", "src"),
-    os.path.join("program", "services", "analyzer", "src"),
-    os.path.join("program", "services", "collector", "src"),
-    os.path.join("program", "services", "writer", "src"),
-):
-    sys.path.insert(0, os.path.join(_ROOT, _rel))
 
 os.chdir(_ROOT)
 
@@ -33,7 +23,7 @@ from analyzer.grounding import (
 )
 from collector.service import StateManager
 from google_docs_client.mcp_client import MCPGoogleDocsClient
-from repair_docs import (
+from autonote.repair_docs import (
     extract_evidence,
     parse_blocks,
     parse_original_sources,

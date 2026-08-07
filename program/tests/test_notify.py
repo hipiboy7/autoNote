@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from notify import ALERT_HEADER, OK_HEADER, AlertContext, BatchNotifier
+from autonote.notify import ALERT_HEADER, OK_HEADER, AlertContext, BatchNotifier
 
 
 class FakeTelegram:

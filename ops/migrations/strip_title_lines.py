@@ -6,9 +6,9 @@
 않지만, 이미 기록된 줄은 이 스크립트로 지운다.
 
 사용법:
-    python scripts/strip_title_lines.py --dry-run
-    python scripts/strip_title_lines.py
-    python scripts/strip_title_lines.py 금리 환율·매크로
+    python ops/migrations/strip_title_lines.py --dry-run
+    python ops/migrations/strip_title_lines.py
+    python ops/migrations/strip_title_lines.py 금리 환율·매크로
 """
 import os
 import sys
@@ -17,21 +17,11 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-for _rel in (
-    os.path.join("program", "src"),
-    os.path.join("program", "libs", "agy-gateway", "src"),
-    os.path.join("program", "libs", "google-docs-client", "src"),
-    os.path.join("program", "libs", "telegram-client", "src"),
-    os.path.join("program", "services", "analyzer", "src"),
-    os.path.join("program", "services", "collector", "src"),
-    os.path.join("program", "services", "writer", "src"),
-):
-    sys.path.insert(0, os.path.join(_ROOT, _rel))
 
 os.chdir(_ROOT)
 
 from google_docs_client.mcp_client import MCPGoogleDocsClient
-from restore_docs import CHUNK_CHARS
+from autonote.restore_docs import CHUNK_CHARS
 from writer import BLOCK_SEPARATOR
 
 TITLE_MARKER = "Document Title:"

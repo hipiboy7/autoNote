@@ -16,8 +16,8 @@ AGENTS.md 가 원문보관을 "텔레그램 원문 그대로 수정 없이 보�
      단 그 ID 가 문서에 이미 있으면 교체하지 않고 제거 대상으로 둔다 (중복 방지).
 
 사용법:
-    python scripts/dedupe_archive.py --dry-run
-    python scripts/dedupe_archive.py
+    python ops/migrations/dedupe_archive.py --dry-run
+    python ops/migrations/dedupe_archive.py
 """
 
 import difflib
@@ -30,23 +30,13 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-for _rel in (
-    os.path.join("program", "src"),
-    os.path.join("program", "libs", "agy-gateway", "src"),
-    os.path.join("program", "libs", "google-docs-client", "src"),
-    os.path.join("program", "libs", "telegram-client", "src"),
-    os.path.join("program", "services", "analyzer", "src"),
-    os.path.join("program", "services", "collector", "src"),
-    os.path.join("program", "services", "writer", "src"),
-):
-    sys.path.insert(0, os.path.join(_ROOT, _rel))
 
 os.chdir(_ROOT)
 
-from batch_lock import require_lock
+from autonote.batch_lock import require_lock
 from google_docs_client.mcp_client import MCPGoogleDocsClient
-from repair_docs import parse_blocks
-from restore_docs import rewrite_document
+from autonote.repair_docs import parse_blocks
+from autonote.restore_docs import rewrite_document
 from telegram_client.mcp_client import MCPTelegramClient
 from writer import BLOCK_SEPARATOR
 

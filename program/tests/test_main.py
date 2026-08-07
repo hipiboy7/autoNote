@@ -12,7 +12,7 @@ from telegram_client import TelegramMessage
 from writer.service import ResearchWriter
 
 # main.py에서 노출할 오케스트레이터 배치 함수를 테스트
-from main import parse_args, run_batch, verify_theme_mappings
+from autonote.main import parse_args, run_batch, verify_theme_mappings
 
 CHANNEL = "-1004421517798"
 

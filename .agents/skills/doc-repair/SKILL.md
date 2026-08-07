@@ -67,18 +67,17 @@ LLM API 키가 `dummy-key` 인 상태로 배치가 돌던 기간(2026-07 ~ 2026-
 
 ```powershell
 cd D:\autoNote
-$env:PYTHONPATH="program/src;program/libs/agy-gateway/src;program/libs/google-docs-client/src;program/libs/telegram-client/src;program/libs/llm-gateway/src;program/services/analyzer/src;program/services/collector/src;program/services/merger/src;program/services/reviewer/src;program/services/writer/src"
 $env:PYTHONIOENCODING="utf-8"
 
 # 1) 먼저 반드시 집계만 (문서를 만들지 않는다)
-python program/src/main.py --mode repair --dry-run
+python -m autonote.main --mode repair --dry-run
 
 # 2) 문서 하나씩 복구 (권장 — 결과를 눈으로 확인하면서 진행)
-python program/src/main.py --mode repair --doc 금리
-python program/src/main.py --mode repair --doc 방산·방위산업
+python -m autonote.main --mode repair --doc 금리
+python -m autonote.main --mode repair --doc 방산·방위산업
 
 # 3) 전체 복구 (오래 걸린다)
-python program/src/main.py --mode repair --doc all
+python -m autonote.main --mode repair --doc all
 ```
 
 **작은 문서(금리 16블록, 방산 6블록)부터 하고 결과를 확인한 뒤 큰 문서로 넘어갈 것.** 반도체사이클 199블록은 약 50회 호출 · 1.2M 토큰 · 30분 이상 걸린다.
@@ -100,8 +99,8 @@ python program/src/main.py --mode repair --doc all
 재생성 결과를 원문보관·구버전과 자동 대조한다. 사람 눈보다 이게 먼저다.
 
 ```powershell
-python scripts\verify_repair.py                    # doc_overrides 에 등록된 전부
-python scripts\verify_repair.py 금리 방산·방위산업     # 특정 테마만
+python ops\tools\verify_repair.py                    # doc_overrides 에 등록된 전부
+python ops\tools\verify_repair.py 금리 방산·방위산업     # 특정 테마만
 ```
 
 확인 항목:
