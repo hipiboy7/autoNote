@@ -28,7 +28,7 @@ def main() -> int:
     from telegram_client.mcp_client import MCPTelegramClient
     from autonote.watchdog import run_watchdog
 
-    state_file = os.getenv("STATE_FILE_PATH", "./data/state.json")
+    state_file = os.getenv("STATE_FILE_PATH", "./var/state.json")
     thought_doc_id = os.getenv(
         "THOUGHT_DOC_ID", "1p0d-bEHdVTzQjRnmXzzzB5HRvUCQSUyktUpksV70TUc"
     )

@@ -8,42 +8,52 @@
 ## 🏗️ 전체 구조
 
 ```
-D:utoNote├── AGENTS.md               ← 운영 규칙 (에이전트가 먼저 읽는 문서)
-├── antigravity.md          ← 문서 위치 안내 (규칙 정본은 program/gemini.md)
+D:\autoNote\
+├── AGENTS.md               ← 운영 규칙 (에이전트가 먼저 읽는 문서)
+├── antigravity.md          ← 문서 위치 안내 (규칙 정본은 docs/rules/개발규칙.md)
 ├── README.md               ← 지금 읽고 있는 시스템 매뉴얼
+├── pyproject.toml          ← 워크스페이스 루트 (도구 설정 전용, 설치 대상 아님)
 ├── sample.env              ← 환경변수 목록 (cp sample.env .env)
 │
-├── program\                ← 애플리케이션 (uv/pip workspace)
-│   ├── gemini.md           ← 개발 그라운드 룰 정본
+├── packages/               ← 모든 파이썬 코드 (uv/pip workspace)
 │   ├── app/                ← autonote 패키지 (배치·복구·알림·워치독)
-│   ├── libs/               ← 공유 추상화 (agy-gateway, google-docs-client, telegram-client)
+│   ├── libs/               ← 공유 추상화 (agy-gateway, google-docs-client,
+│   │                          telegram-client, llm-gateway)
 │   ├── services/           ← 도메인 서비스 (collector, analyzer, writer, merger, reviewer)
-│   └── tests/              ← 앱 계층 테스트
+│   └── tests/              ← 앱 계층 테스트 (패키지별 테스트는 각 패키지 안)
 │
-├── cli\                    ← 실행 진입점
+├── cli/                    ← 실행 진입점 (스케줄러가 가리키는 곳)
 │   ├── run_daily_batch.bat     매일 08:50 스케줄러가 실행
 │   ├── run_health_check.bat    매일 09:40 배치 이상 감시
 │   ├── run_backfill.bat        구간 재처리
 │   ├── startup_agy.bat         VM 로그인 시 agy 기동
 │   └── check_batch_health.py   워치독 본체
 │
-├── ops\                    ← 운영 스크립트
+├── ops/                    ← 운영 스크립트
 │   ├── tools/              반복 사용 (sync_to_drive, verify_repair, decrypt_token)
 │   ├── migrations/         일회성 보정 (relabel_dates_kst, dedupe_archive 등)
 │   └── archive/            현 배선에서 미사용 (삭제 전 보관)
 │
-├── docs\                   ← 산출물
+├── docs/                   ← 문서
 │   ├── 00-신규프로젝트-설계교훈.md   ← 다른 프로젝트에도 쓰는 교훈 정리
-│   └── P01~P06_*.md                Phase 산출물
+│   ├── rules/개발규칙.md             ← 개발 그라운드 룰 정본
+│   ├── phases/                      P01~P06 산출물
+│   ├── journal/                     세션별 작업 기록
+│   └── nextpjt/                     다음 프로젝트(다채널 수집) 설계 문서
 │
-├── data\                   ← 런타임 상태 (git 제외)
+├── var/                    ← 런타임 (git 제외, 통째로)
 │   ├── state.json          마지막 처리 ID·배치 결과·문서 매핑
 │   └── agy_usage.jsonl     워커 토큰 사용량 누적
 │
-├── .agents\skills\         ← agy 런북 (daily-batch, doc-repair, date-relabel)
-├── telegram-mcp\           ← 텔레그램 MCP 서버 (vendored, git 제외)
-└── working_docs\           ← 세션별 작업 기록
+├── vendor/                 ← 외부 클론 (git 제외)
+│   └── telegram-mcp/       텔레그램 MCP 서버
+│
+└── .agents/skills/         ← agy 런북 (daily-batch, doc-repair, date-relabel)
 ```
+
+> **경로 상수 주의.** `vendor/telegram-mcp` 와 `ops/tools/decrypt_token.js` 는 코드가
+> 저장소 루트를 역산해 참조한다. 이 디렉토리를 옮기면 해당 상수와 테스트를 함께 고칠 것.
+> 절대 경로를 박아 두었다가 2026-08-08~10 배치가 3일간 조용히 실패했다.
 
 ### 실행 방법
 
@@ -52,14 +62,14 @@ D:utoNote├── AGENTS.md               ← 운영 규칙 (에이전트가 �
 ```powershell
 python -m autonote.main --mode status     # 상태 판정 (0=정상, 2=이상)
 python -m autonote.main --mode batch      # 일일 배치
-D:utoNote\cliun_daily_batch.bat       # 스케줄러가 실행하는 것과 동일
+D:\autoNote\cli\run_daily_batch.bat       # 스케줄러가 실행하는 것과 동일
 ```
 
 설치가 풀렸다면 (새 환경·파이썬 재설치 후):
 
 ```powershell
-cd D:utoNote
-foreach ($m in @("program/libs/agy-gateway","program/libs/google-docs-client","program/libs/telegram-client","program/libs/llm-gateway","program/services/analyzer","program/services/collector","program/services/merger","program/services/reviewer","program/services/writer","program/app")) { pip install -e $m --no-deps }
+cd D:\autoNote
+foreach ($m in @("packages/libs/agy-gateway","packages/libs/google-docs-client","packages/libs/telegram-client","packages/libs/llm-gateway","packages/services/analyzer","packages/services/collector","packages/services/merger","packages/services/reviewer","packages/services/writer","packages/app")) { pip install -e $m --no-deps }
 ```
 
 ---

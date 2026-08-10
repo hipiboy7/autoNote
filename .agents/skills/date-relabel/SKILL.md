@@ -79,4 +79,4 @@ python ops\migrations\relabel_dates_kst.py 반도체사이클 --limit 1000
 1. 보정 건수와 잔존·미확보 건수를 사용자에게 보고한다.
 2. `python ops\tools\verify_repair.py` 는 `doc_overrides` 기반이라 이 작업과는 무관하다.
    대신 `--dry-run` 을 다시 돌려 대상이 0건이 되었는지 확인한다.
-3. `working_docs/YYYY-MM-DD_작업요약.md` 에 보정 이력을 남긴다.
+3. `docs/journal/YYYY-MM-DD_작업요약.md` 에 보정 이력을 남긴다.

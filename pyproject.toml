@@ -1,0 +1,36 @@
+# 워크스페이스 루트 — 도구 설정 전용.
+#
+# 이 파일 자체는 설치 대상이 아니다([project] 테이블 없음). 실제 배포 단위는
+# packages/ 아래 각 패키지이며 editable 로 설치한다. 설치 절차는 README.md 참조.
+#
+# 여기에 [project] 를 두면 `pip install -e .` 이 루트 전체를 하나의 패키지로
+# 잡아 버려서 패키지 단위 test/release(개발규칙 그라운드 룰 2)가 깨진다.
+
+[tool.uv]
+workspace = { members = ["packages/libs/*", "packages/services/*", "packages/app"] }
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+extend-exclude = ["vendor", "var", "ops/archive"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = []
+
+[tool.pytest.ini_options]
+# 각 패키지의 pyproject.toml 은 pythonpath=["src"] 를 갖고 있어 단독 실행도 되지만,
+# 루트에서 한 번에 돌릴 때는 editable 설치된 패키지를 그대로 import 한다.
+testpaths = [
+    "packages/tests",
+    "packages/libs/agy-gateway/tests",
+    "packages/libs/google-docs-client/tests",
+    "packages/libs/llm-gateway/tests",
+    "packages/libs/telegram-client/tests",
+    "packages/services/analyzer/tests",
+    "packages/services/collector/tests",
+    "packages/services/merger/tests",
+    "packages/services/reviewer/tests",
+    "packages/services/writer/tests",
+]
+asyncio_mode = "auto"

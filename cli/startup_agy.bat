@@ -8,5 +8,5 @@ echo   디렉터리: D:\autoNote
 echo   모델: settings.json 기본값 (Gemini 3.5 Flash (High))
 echo ============================================
 echo.
-start /b python D:\autoNote\scripts\sync_to_drive.py
+start /b python D:\autoNote\ops\tools\sync_to_drive.py
 "C:\Users\SYSADMIN\AppData\Local\agy\bin\agy.exe" --dangerously-skip-permissions

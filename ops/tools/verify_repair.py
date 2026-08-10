@@ -46,7 +46,7 @@ ORIGINALS = [
     "1gfyz-nJZ5vtcH8enwnxcGgjjpZ6Smoqj0RvVDix5BMI",  # 2026-08
 ]
 
-overrides = getattr(StateManager("./data/state.json").load_state(), "doc_overrides", {}) or {}
+overrides = getattr(StateManager("./var/state.json").load_state(), "doc_overrides", {}) or {}
 targets = sys.argv[1:] or sorted(overrides)
 if not targets:
     print("검증할 재생성 문서가 없습니다 (doc_overrides 비어 있음).")

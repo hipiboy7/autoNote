@@ -6,7 +6,7 @@
 
 ## 1. 그라운드 룰 (필수 선행)
 
-**이 프로젝트의 모든 개발·설계·문서 규칙은 [`program/gemini.md`](./program/gemini.md) 를 따른다.** 코드를 만들거나 고치기 전에 반드시 읽을 것. 본 문서(AGENTS.md)는 *운영* 규칙이고, `gemini.md` 는 *개발* 규칙이다. 충돌하면 `gemini.md` 가 우선한다.
+**이 프로젝트의 모든 개발·설계·문서 규칙은 [`docs/rules/개발규칙.md`](./docs/rules/개발규칙.md) 를 따른다.** 코드를 만들거나 고치기 전에 반드시 읽을 것. 본 문서(AGENTS.md)는 *운영* 규칙이고, `gemini.md` 는 *개발* 규칙이다. 충돌하면 `gemini.md` 가 우선한다.
 
 `gemini.md` 가 규정하는 핵심 (요약 — 원문이 정본):
 
@@ -40,7 +40,7 @@ Layer 2 · agy 워커 (1회성 무상태, 스키마 강제)
    판단만 한다. 역할별 = 모델 + 추론강도 + 역할 프롬프트 + JSON 스키마.
 ```
 
-**중요: agy 에는 subagent 정의 기능이 없다.** 커스터마이징 타입은 Rules(`AGENTS.md`/`GEMINI.md`) / Skills / Plugins / Hooks / MCP 뿐이고 `agy agents` 는 비어 있다. 따라서 "서브에이전트" 는 위 Layer 2 의 워커 조합으로 구현하며, 정의는 [`program/src/worker_roster.py`](./program/src/worker_roster.py) 가 단일 출처다.
+**중요: agy 에는 subagent 정의 기능이 없다.** 커스터마이징 타입은 Rules(`AGENTS.md`/`GEMINI.md`) / Skills / Plugins / Hooks / MCP 뿐이고 `agy agents` 는 비어 있다. 따라서 "서브에이전트" 는 위 Layer 2 의 워커 조합으로 구현하며, 정의는 [`packages/app/src/autonote/worker_roster.py`](./packages/app/src/autonote/worker_roster.py) 가 단일 출처다.
 
 ### 워커 호출 규약 (실측 검증됨)
 
@@ -112,10 +112,10 @@ agy --model <id> [--effort low|medium|high] --output-format json
 ## 5. 설정
 
 - 기본 채널: `피터케이 채널(26년 하반기)` (`-1004421517798`, `TELEGRAM_CHANNEL_ID`)
-- 상태 파일: `./data/state.json` — 채널별 마지막 처리 message_id, 마지막 실행 시각, 주간리뷰 주차, 자동 생성된 월별 문서
-- 토큰 사용량 로그: `./data/agy_usage.jsonl` (`AGY_USAGE_LOG`)
+- 상태 파일: `./var/state.json` — 채널별 마지막 처리 message_id, 마지막 실행 시각, 주간리뷰 주차, 자동 생성된 월별 문서
+- 토큰 사용량 로그: `./var/agy_usage.jsonl` (`AGY_USAGE_LOG`)
 - 대상 드라이브 폴더: `투자리서치노트_gemini` (`1mHmyPezUsD4NF5AlIbHkzKzf6TymmesH`)
-- 작업 히스토리: `./working_docs/` — **새 세션 시작 시 최신 문서를 읽고 맥락을 이어받을 것**
+- 작업 히스토리: `./docs/journal/` — **새 세션 시작 시 최신 문서를 읽고 맥락을 이어받을 것**
 - 환경변수 전체 목록: [`sample.env`](./sample.env)
 
 ### 문서 매핑
@@ -262,4 +262,4 @@ schtasks /create /tn "autoNote_HealthCheck" /tr "D:\autoNote\cli\run_health_chec
   - Google Drive 동기화 포함: `ops/tools/sync_to_drive.py` 는 `.env` 계열, `telegram-mcp/`, 세션·키 파일을 제외한다(`is_excluded_file`). 이 제외 규칙을 완화하지 않는다.
   - 실값이 담긴 `.env` 는 커밋 금지. 키 목록은 `sample.env` 로만 관리한다.
 - **배치 실행 원칙**: 에이전트가 자체 판단으로 Google Workspace 툴을 직접 호출해 문서를 임의로 작성하는 것을 금지한다. 반드시 `python -m autonote.main` 을 기동하는 방식으로 실행하고 `state.json` 일관성을 유지한다.
-- 작업 세션 종료 시 `./working_docs/YYYY-MM-DD_작업요약.md` 에 히스토리를 남긴다. 변경 내역, 미완료 작업, 다음 에이전트가 알아야 할 맥락을 포함할 것.
+- 작업 세션 종료 시 `./docs/journal/YYYY-MM-DD_작업요약.md` 에 히스토리를 남긴다. 변경 내역, 미완료 작업, 다음 에이전트가 알아야 할 맥락을 포함할 것.

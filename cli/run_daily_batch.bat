@@ -15,7 +15,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo Google Drive 동기화 실행 중...
-python D:\autoNote\scripts\sync_to_drive.py
+python D:\autoNote\ops\tools\sync_to_drive.py
 
 endlocal
 

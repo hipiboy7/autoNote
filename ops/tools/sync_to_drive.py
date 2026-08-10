@@ -21,7 +21,10 @@ LOCAL_DIR = "D:\\autoNote"
 EXCLUDE_DIRS = {
     ".git", ".idea", "__pycache__", "node_modules", ".gemini", ".claude",
     "venv", ".venv", ".pytest_cache", ".ruff_cache", ".mypy_cache",
-    "telegram-mcp",  # Telethon 세션 및 API 자격증명 보관 위치 — 업로드 절대 금지
+    "vendor",        # 외부 클론 (Telethon 세션·API 자격증명) — 업로드 절대 금지
+    "var",           # 런타임 상태·로그·산출물
+    "ops",           # 일회성 보정 스크립트·보관 파일
+    "telegram-mcp",  # vendor/ 이전 경로. 잔존 사본 대비 유지
 }
 # state.json 등은 로컬 런타임 전용이므로 업로드 제외
 EXCLUDE_FILES = {
