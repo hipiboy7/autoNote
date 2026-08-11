@@ -175,6 +175,7 @@ def run_batch(
             if msg.id in no_body_ids:
                 skipped_count += 1
                 last_success_id = msg.id
+                collector.state_manager.update_channel_state(channel_id, msg.id)
                 continue
 
             title = msg.text.split("\n")[0][:30].strip() or "제목 없음"
@@ -215,11 +216,21 @@ def run_batch(
                 target_doc_id=link_doc_id
             )
 
-            # 각 메시지 성공 완료 시점마다 last_success_id 업데이트 (원자적 체크포인트)
+            # 메시지 하나를 다 쓴 즉시 state 에 **기록**한다.
+            #
+            # 메모리 변수만 갱신하고 루프 끝에서 한 번 저장하면, 예외가 아니라
+            # 프로세스가 죽는 경우(VM 종료, 정전, 강제 종료)에 아무것도 저장되지
+            # 않는다. 그러면 다음 실행이 같은 메시지를 다시 기록해 문서에 중복
+            # 블록이 쌓인다 (과거 298블록 중복의 원인과 같은 구조).
+            #
+            # 실제로 2026-08-11 배치는 이 저장 직후 09:04 에 VM 이 꺼졌다.
+            # 4분만 빨랐어도 37건이 중복 기록됐을 것이다.
             last_success_id = msg.id
+            collector.state_manager.update_channel_state(channel_id, msg.id)
 
         except Exception as e:
-            # 배치 중단 시 직전 성공 ID까지 안전 세이브하여 중복/유실 차단
+            # 예외 경로에서도 한 번 더 저장한다. 위에서 이미 저장했으므로 보통은
+            # 같은 값이지만, 예외가 저장 자체에서 났을 경우를 대비한다.
             print(
                 f"[Batch] Error during pipeline execution at message {msg.id}: "
                 f"{str(e)[:400]}",

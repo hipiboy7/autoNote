@@ -210,6 +210,35 @@ schtasks /create /tn "autoNote_HealthCheck" /tr "D:\autoNote\cli\run_health_chec
 
 같은 이상을 하루에 여러 번 통보하지 않도록 `last_alert_date` 로 억제하고, 배치가 성공하면 억제를 해제한다. 실패 → 성공으로 바뀐 경우에만 복구 알림을 보낸다 (매일 성공 알림은 보내지 않는다).
 
+### 스케줄 작업이 반드시 가져야 할 설정
+
+| 설정 | 값 | 이유 |
+|---|---|---|
+| `StartWhenAvailable` (누락 시 가능한 한 빨리 시작) | **True** | VM 이 08:50 에 꺼져 있으면 그날 배치가 영영 안 돈다. 기본값은 False 다 |
+| `MultipleInstances` | `IgnoreNew` | 중복 실행 방지. `batch.lock` 과 이중 방어 |
+
+확인·설정:
+
+```powershell
+Get-ScheduledTask | Where-Object { $_.TaskName -match 'autoNote' } | ForEach-Object {
+    "$($_.TaskName) : StartWhenAvailable=$($_.Settings.StartWhenAvailable)"
+}
+```
+
+### 스케줄러 이력을 신뢰하려면
+
+`schtasks` 의 `LastTaskResult` 는 **bat 이 종료 코드를 전파할 때만** 의미가 있다.
+`echo` 가 `ERRORLEVEL` 을 0 으로 덮어쓰므로 `endlocal & exit /b %RC%` 로 끝내야 한다.
+
+작업이 실제로 언제 돌았는지 사후 확인하려면 스케줄러 운영 로그가 켜져 있어야 한다
+(기본 꺼짐). **관리자 권한** 으로 한 번 실행:
+
+```powershell
+wevtutil sl "Microsoft-Windows-TaskScheduler/Operational" /e:true
+```
+
+꺼져 있으면 시스템 부팅 로그(이벤트 12/13)로 역추적하는 수밖에 없다.
+
 ---
 
 ## 8. 테마 분류 규칙

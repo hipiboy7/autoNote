@@ -251,3 +251,76 @@ def test_cli_argument_parsing():
         assert args.mode == "merge"
         assert args.model == "claude-opus-4-6-thinking"
         assert args.channel == "c123"
+
+
+def test_state_is_persisted_after_every_message(mock_pipeline_services):
+    """메시지 하나를 처리할 때마다 state 에 기록해야 한다.
+
+    메모리 변수만 갱신하고 루프 끝에서 한 번 저장하면, 예외가 아니라 프로세스가
+    죽는 경우(VM 종료·정전·강제 종료)에 아무것도 저장되지 않는다. 그러면 다음
+    실행이 같은 메시지를 다시 기록해 문서에 중복 블록이 쌓인다.
+
+    2026-08-11 배치는 마지막 저장 직후 09:04 에 VM 이 꺼졌다. 4분만 빨랐어도
+    37건이 중복 기록됐을 상황이었다.
+    """
+    collector, triage, analyzer, writer, merger, reviewer, state_manager = mock_pipeline_services
+
+    run_batch(
+        collector=collector,
+        triage=triage,
+        analyzer=analyzer,
+        writer=writer,
+        merger=merger,
+        reviewer=reviewer,
+        thought_doc_id="thought_doc",
+        original_doc_resolver=lambda msg_date: "orig_doc",
+        doc_mappings=DOC_MAPPINGS,
+        channel_id=CHANNEL,
+        base_date=datetime(2026, 7, 18, 12, 0, 0),
+    )
+
+    saved_ids = [c.args[1] for c in state_manager.update_channel_state.call_args_list]
+
+    # 세 메시지(101 본문없음, 102 잡담, 103 리서치) 각각의 처리 직후에 저장된다.
+    assert saved_ids[:3] == [101, 102, 103], (
+        "메시지마다 저장되지 않았습니다. 프로세스가 죽으면 진행 상황이 사라집니다: "
+        f"{saved_ids}"
+    )
+
+
+def test_progress_survives_a_kill_in_the_middle(mock_pipeline_services):
+    """루프 중간에 프로세스가 죽어도 직전까지의 진행이 남아야 한다.
+
+    SystemExit 는 Exception 을 상속하지 않으므로 run_batch 의 except 절이
+    잡지 않는다. 즉 '예외 처리 덕분에 저장됐다' 가 아니라 '이미 저장돼 있다'
+    를 검증한다 — 강제 종료와 같은 조건이다.
+    """
+    collector, triage, analyzer, writer, merger, reviewer, state_manager = mock_pipeline_services
+
+    def die_on_the_third(*args, **kwargs):
+        if writer.pre_fill_thought_note.call_count >= 2:
+            raise SystemExit("VM 종료 시뮬레이션")
+
+    writer.pre_fill_thought_note.side_effect = die_on_the_third
+
+    with pytest.raises(SystemExit):
+        run_batch(
+            collector=collector,
+            triage=triage,
+            analyzer=analyzer,
+            writer=writer,
+            merger=merger,
+            reviewer=reviewer,
+            thought_doc_id="thought_doc",
+            original_doc_resolver=lambda msg_date: "orig_doc",
+            doc_mappings=DOC_MAPPINGS,
+            channel_id=CHANNEL,
+            base_date=datetime(2026, 7, 18, 12, 0, 0),
+        )
+
+    saved_ids = [c.args[1] for c in state_manager.update_channel_state.call_args_list]
+
+    # 101(본문없음)과 102(잡담)는 끝났으므로 남아 있어야 하고,
+    # 103 은 완료 전에 죽었으므로 저장되지 않아야 한다 (다음 실행에서 재시도).
+    assert 102 in saved_ids, f"완료된 메시지가 저장되지 않았습니다: {saved_ids}"
+    assert 103 not in saved_ids, f"미완료 메시지가 저장됐습니다 (유실 위험): {saved_ids}"
