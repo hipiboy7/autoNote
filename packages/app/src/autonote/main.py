@@ -366,6 +366,7 @@ def main():
         "환율·매크로": os.getenv("THEME_MACRO_DOC_ID", "18lU0RmfkofcRuosdPn664x4AG8DSO12gvsDqLUi2eKE"),
         "금리": os.getenv("THEME_RATE_DOC_ID", "1PK88LaNGhBrxGC0xFGX4tkTPUU15kqzuOhK5SzQ74Eo"),
         "방산·방위산업": os.getenv("THEME_DEFENSE_DOC_ID", "1AvDpijnMrsi92m5OGg2APcg8xfniGA-jiXkiA6ygIJQ"),
+        "ESS·2차전지": os.getenv("THEME_ESS_DOC_ID", "1lqWAS2R_U44GCIbmLoBfhcGAkjRPiAXthZpIC4W3UHA"),
         "한화에어로스페이스": os.getenv("STOCK_HANWHA_DOC_ID", "1F2YJCAtqznASlhY9351UA0qX-81bw2hbrqQM6qrrd9I"),
         "에이유브랜즈": os.getenv("STOCK_AUBRANDS_DOC_ID", "1cUfOHw0OAV0Wwpi5qM4aR3BSi2-H76aV7F8L9RtK-ek"),
         "에이피알": os.getenv("STOCK_APR_DOC_ID", "1zC3oDw1kbP651QjsPHztgzo7aCrZr7qPczddgdwmEvY"),

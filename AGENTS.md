@@ -129,6 +129,7 @@ agy --model <id> [--effort low|medium|high] --output-format json
 | 테마: 환율·매크로 | [10_테마 환율·매크로](https://docs.google.com/document/d/18lU0RmfkofcRuosdPn664x4AG8DSO12gvsDqLUi2eKE/edit) |
 | 테마: 금리 | [10_테마 금리](https://docs.google.com/document/d/1PK88LaNGhBrxGC0xFGX4tkTPUU15kqzuOhK5SzQ74Eo/edit) |
 | 테마: 방산·방위산업 | [10_테마 방산·방위산업](https://docs.google.com/document/d/1AvDpijnMrsi92m5OGg2APcg8xfniGA-jiXkiA6ygIJQ/edit) |
+| 테마: ESS·2차전지 | [10_테마 ESS·2차전지](https://docs.google.com/document/d/1lqWAS2R_U44GCIbmLoBfhcGAkjRPiAXthZpIC4W3UHA/edit) |
 | 종목: 한화에어로스페이스 | [20_종목 한화에어로스페이스](https://docs.google.com/document/d/1F2YJCAtqznASlhY9351UA0qX-81bw2hbrqQM6qrrd9I/edit) |
 | 종목: 에이유브랜즈 | [20_종목 에이유브랜즈](https://docs.google.com/document/d/1cUfOHw0OAV0Wwpi5qM4aR3BSi2-H76aV7F8L9RtK-ek/edit) |
 | 종목: 에이피알 | [20_종목 에이피알](https://docs.google.com/document/d/1zC3oDw1kbP651QjsPHztgzo7aCrZr7qPczddgdwmEvY/edit) |

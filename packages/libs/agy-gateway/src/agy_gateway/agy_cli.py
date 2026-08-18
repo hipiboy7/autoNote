@@ -6,8 +6,15 @@
         --dangerously-skip-permissions --disable-slash-commands
 
     → stdout 에 단일 JSON 엔벨로프:
-      {conversation_id, status, response, duration_seconds, num_turns,
+      {conversation_id, status, error, response, duration_seconds, num_turns,
        structured_output, json_schema, usage}
+
+계약 변경 (agy 1.1.14, 2026-08-18 실측):
+  * 봉투에 `error` 키가 추가됐다.
+  * 모델이 첫 시도에서 스키마를 어기면 agy 가 내부적으로 재시도해 바로잡는데,
+    **그렇게 성공한 경우에도 status 는 ERROR** 로 남고 error 에 첫 위반이 기록된다.
+    즉 status=ERROR 와 structured_output 유효는 동시에 성립한다.
+    status 만 보고 버리면 멀쩡한 결과를 잃는다 (2026-08-15~18 배치 나흘 실패).
 
 주의사항 (실측 근거):
   * `--json-schema` 는 `--output-format json|stream-json` 과 함께만 쓸 수 있다.
@@ -196,23 +203,43 @@ class AgyCliRunner(WorkerRunner):
 
         envelope = self._load_envelope(raw)
         status = str(envelope.get("status", "")).upper()
-        if status and status != "SUCCESS":
-            raise WorkerUnavailableError(
-                f"agy status={status} response={_truncate(str(envelope.get('response')))}"
-            )
-
+        error_text = str(envelope.get("error") or "").strip()
         response_text = str(envelope.get("response") or "")
         structured: Any = envelope.get("structured_output")
 
         if schema is not None:
+            # agy 1.1.14 부터 봉투에 error 키가 생겼고, 모델이 첫 시도에서 스키마를
+            # 어기면 agy 가 **내부 재시도로 바로잡은 뒤에도** status=ERROR 와 첫 위반
+            # 내용을 남긴다 (실측: "invalid arguments: at '/reports/0': missing
+            # properties 'main_claim', 'risks', 'critical_question'").
+            # structured_output 은 정상인데 status 만 보고 버리면 멀쩡한 결과를 잃는다.
+            # 2026-08-15~18 배치가 정확히 이것 때문에 나흘간 실패했다.
+            #
+            # 따라서 스키마를 요구한 호출은 **structured_output 의 유효성**을 판정
+            # 기준으로 삼는다. 안전망은 호출자에 있다 — analyzer 가 pydantic 으로
+            # 검증하고 원문과 근거를 대조하므로, 엉터리 출력은 그 단계에서 걸린다.
             structured = self._coerce_structured(structured, response_text)
             if structured is None:
                 raise WorkerUnavailableError(
-                    "구조화 출력을 얻지 못했습니다. "
+                    f"구조화 출력을 얻지 못했습니다. status={status} "
+                    f"error={_truncate(error_text)} response={_truncate(response_text)}"
+                )
+            if status and status != "SUCCESS":
+                print(
+                    f"[AgyCliRunner] {spec.name}/{spec.model} status={status} 이지만 "
+                    "구조화 출력은 확보했습니다 (agy 내부 재시도). "
+                    f"error={_truncate(error_text, 200)}",
+                    file=sys.stderr,
+                )
+        else:
+            # 스키마가 없으면 판정할 근거가 response 뿐이므로 status 를 그대로 신뢰한다.
+            if status and status != "SUCCESS":
+                raise WorkerUnavailableError(
+                    f"agy status={status} error={_truncate(error_text)} "
                     f"response={_truncate(response_text)}"
                 )
-        elif structured is None:
-            structured = response_text
+            if structured is None:
+                structured = response_text
 
         return WorkerResult(
             structured=structured,

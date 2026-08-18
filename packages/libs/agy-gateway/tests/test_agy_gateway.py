@@ -111,14 +111,67 @@ def test_retries_then_raises_on_nonzero_exit(mock_run):
 
 
 @patch("agy_gateway.agy_cli.subprocess.run")
-def test_non_success_status_raises(mock_run):
+def test_non_success_status_raises_when_output_unrecoverable(mock_run):
+    """status=ERROR 자체로는 실패가 아니다. 구조화 출력까지 못 얻을 때 실패다.
+
+    agy 1.1.14 부터 status=ERROR 는 '내부 재시도가 있었다' 는 뜻일 수도 있어서,
+    판정 기준은 structured_output 확보 여부다. error 내용은 메시지에 실어 보낸다.
+    """
     mock_run.return_value = MagicMock(
-        returncode=0, stdout=envelope(status="ERROR", structured_output=None), stderr=""
+        returncode=0,
+        stdout=envelope(
+            status="ERROR",
+            structured_output=None,
+            response="죄송하지만 분석할 수 없습니다.",
+            error="invalid arguments: at '/reports'",
+        ),
+        stderr="",
     )
 
     runner = AgyCliRunner(agy_path="agy.exe", usage_log_path="", max_attempts=1)
-    with pytest.raises(WorkerUnavailableError):
+    with pytest.raises(WorkerUnavailableError) as exc:
         runner.run(spec(), "분석해라", SCHEMA)
+
+    assert "invalid arguments" in str(exc.value)
+
+
+@patch("agy_gateway.agy_cli.subprocess.run")
+def test_status_error_is_accepted_when_structured_output_is_valid(mock_run):
+    """agy 1.1.14: 내부 재시도로 스키마를 맞춘 뒤에도 status=ERROR 가 남는다.
+
+    structured_output 이 멀쩡한데 status 만 보고 버리면 결과를 잃는다.
+    2026-08-15~18 배치가 이것 때문에 나흘간 실패했다.
+    """
+    mock_run.return_value = MagicMock(
+        returncode=0,
+        stdout=envelope(
+            status="ERROR",
+            error="invalid arguments:\n- at '/reports/0': missing properties 'main_claim'",
+        ),
+        stderr="",
+    )
+
+    runner = AgyCliRunner(agy_path="agy.exe", usage_log_path="", max_attempts=1)
+    result = runner.run(spec(), "분석해라", SCHEMA)
+
+    assert result.structured == {"theme": "금리"}
+    assert result.total_tokens == 22205
+
+
+@patch("agy_gateway.agy_cli.subprocess.run")
+def test_status_error_without_schema_still_raises(mock_run):
+    """스키마가 없으면 유효성을 판정할 근거가 없으므로 status 를 그대로 신뢰한다."""
+    mock_run.return_value = MagicMock(
+        returncode=0,
+        stdout=envelope(status="ERROR", structured_output=None, error="boom"),
+        stderr="",
+    )
+
+    runner = AgyCliRunner(agy_path="agy.exe", usage_log_path="", max_attempts=1)
+    with pytest.raises(WorkerUnavailableError) as exc:
+        runner.run(spec(), "분석해라", schema=None)
+
+    assert "boom" in str(exc.value)
 
 
 def test_oversized_prompt_is_rejected_before_launching_agy():

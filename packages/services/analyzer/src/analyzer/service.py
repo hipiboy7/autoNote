@@ -10,7 +10,7 @@
 
 import json
 import sys
-from typing import Dict, List, Literal, Sequence, Tuple
+from typing import Dict, List, Literal, Sequence, Tuple, get_args
 
 from agy_gateway import WorkerRunner, WorkerSpec, WorkerUnavailableError
 from pydantic import BaseModel, Field
@@ -18,27 +18,23 @@ from pydantic import BaseModel, Field
 from .grounding import check_grounding
 
 # 테마 목록. 문서 매핑표의 키와 정확히 일치해야 하며 main.py 가 시작 시 검증한다.
-THEMES: Tuple[str, ...] = (
-    "반도체사이클",
-    "시장심리·수급",
-    "환율·매크로",
-    "금리",
-    "방산·방위산업",
-    "한화에어로스페이스",
-    "에이유브랜즈",
-    "에이피알",
-)
-
+#
+# Literal 이 정본이고 THEMES 는 여기서 파생시킨다. 예전에는 같은 목록을 두 벌 적어
+# 두었는데, 테마를 추가할 때 한쪽만 고치면 스키마(enum)와 매핑 검증이 조용히
+# 어긋난다. 한 곳만 고치면 되도록 단일 출처로 둔다.
 ThemeName = Literal[
     "반도체사이클",
     "시장심리·수급",
     "환율·매크로",
     "금리",
     "방산·방위산업",
+    "ESS·2차전지",
     "한화에어로스페이스",
     "에이유브랜즈",
     "에이피알",
 ]
+
+THEMES: Tuple[str, ...] = get_args(ThemeName)
 
 
 class ResearchReport(BaseModel):
