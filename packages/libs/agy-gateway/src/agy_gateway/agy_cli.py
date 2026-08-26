@@ -56,6 +56,45 @@ def _truncate(text: str, limit: int = MAX_ERROR_CHARS) -> str:
     return f"{text[:limit]}… (총 {len(text)}자, 이하 생략)"
 
 
+def _failure_detail(returncode: int, stdout: str, stderr: str) -> str:
+    """0 이 아닌 종료 코드의 원인을 사람이 읽을 수 있게 만든다.
+
+    **agy 는 실패 원인을 stderr 가 아니라 stdout 의 봉투에 적는다.** 예전에는
+    stderr 만 기록해서 로그에 `exit=1 stderr=` 만 남았고, 원인이 보이지 않았다.
+    주간리뷰가 3주간 실패하는 동안 진짜 원인(`timeout waiting for response`)이
+    내내 stdout 에 있었는데 우리가 버리고 있었다 (2026-08-26 확인).
+
+    봉투를 읽을 수 있으면 error/status 를 앞세우고, 아니면 stdout 원문을 싣는다.
+    """
+    parts = [f"exit={returncode}"]
+
+    envelope = None
+    raw = (stdout or "").strip()
+    if raw:
+        try:
+            candidate = json.loads(raw)
+            if isinstance(candidate, dict):
+                envelope = candidate
+        except json.JSONDecodeError:
+            envelope = None
+
+    if envelope is not None:
+        status = str(envelope.get("status") or "").strip()
+        error = str(envelope.get("error") or "").strip()
+        if status:
+            parts.append(f"status={status}")
+        if error:
+            parts.append(f"error={_truncate(error)}")
+        if not status and not error:
+            parts.append(f"stdout={_truncate(raw)}")
+    elif raw:
+        parts.append(f"stdout={_truncate(raw)}")
+
+    err = (stderr or "").strip()
+    parts.append(f"stderr={_truncate(err)}" if err else "stderr=(없음)")
+    return " ".join(parts)
+
+
 class AgyCliRunner(WorkerRunner):
     def __init__(
         self,
@@ -101,9 +140,7 @@ class AgyCliRunner(WorkerRunner):
                 elapsed = time.monotonic() - started
 
                 if proc.returncode != 0:
-                    last_error = (
-                        f"exit={proc.returncode} stderr={_truncate(proc.stderr)}"
-                    )
+                    last_error = _failure_detail(proc.returncode, proc.stdout, proc.stderr)
                     print(
                         f"[AgyCliRunner] {spec.name}/{spec.model} 실행 실패 "
                         f"(시도 {attempt}/{self.max_attempts}): {last_error}",

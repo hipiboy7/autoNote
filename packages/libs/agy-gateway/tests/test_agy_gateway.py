@@ -184,6 +184,50 @@ def test_oversized_prompt_is_rejected_before_launching_agy():
 
 
 @patch("agy_gateway.agy_cli.subprocess.run")
+def test_nonzero_exit_surfaces_error_from_stdout_envelope(mock_run):
+    """agy 는 실패 원인을 stderr 가 아니라 stdout 봉투에 적는다.
+
+    주간리뷰가 3주간 실패하는 동안 진짜 원인이 내내 stdout 에 있었는데
+    stderr 만 기록해 `exit=1 stderr=` 만 남았다 (2026-08-26 확인).
+    """
+    mock_run.return_value = MagicMock(
+        returncode=1,
+        stdout=json.dumps({
+            "conversation_id": "abc",
+            "status": "ERROR",
+            "response": "",
+            "error": "timeout waiting for response",
+            "duration_seconds": 228.5,
+        }),
+        stderr="",
+    )
+
+    runner = AgyCliRunner(agy_path="agy.exe", usage_log_path="", max_attempts=1)
+    with pytest.raises(WorkerUnavailableError) as exc:
+        runner.run(spec(), "분석해라", SCHEMA)
+
+    message = str(exc.value)
+    assert "timeout waiting for response" in message
+    assert "status=ERROR" in message
+    assert "stderr=(없음)" in message
+
+
+@patch("agy_gateway.agy_cli.subprocess.run")
+def test_nonzero_exit_includes_raw_stdout_when_not_json(mock_run):
+    """봉투를 못 읽어도 stdout 을 버리지 않는다."""
+    mock_run.return_value = MagicMock(
+        returncode=2, stdout="Fatal: model not available", stderr=""
+    )
+
+    runner = AgyCliRunner(agy_path="agy.exe", usage_log_path="", max_attempts=1)
+    with pytest.raises(WorkerUnavailableError) as exc:
+        runner.run(spec(), "분석해라", SCHEMA)
+
+    assert "Fatal: model not available" in str(exc.value)
+    assert "exit=2" in str(exc.value)
+
+
+@patch("agy_gateway.agy_cli.subprocess.run")
 def test_error_message_is_truncated(mock_run):
     """거대한 프롬프트가 오류 로그를 덮지 않아야 한다."""
     mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="E" * 5000)
