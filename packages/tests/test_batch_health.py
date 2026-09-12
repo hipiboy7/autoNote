@@ -84,6 +84,62 @@ def test_stale_threshold_is_configurable(monkeypatch):
     assert evaluate_batch_health(state, NOW)[0] == VERDICT_OK
 
 
+def test_stale_when_today_has_no_batch_even_if_age_is_within_limit():
+    """2026-08-26 실제 사례 — 경과 시간만 보면 놓친다.
+
+    8/25 배치가 회수 실행으로 10:16 KST 에 늦게 돌았고 8/26 은 아예 안 돌았는데,
+    경과가 24.9시간이라 허용치(26시간) 안이었다. 날짜 규칙이 이걸 잡아야 한다.
+    """
+    last = datetime(2026, 8, 25, 1, 16, tzinfo=timezone.utc)   # KST 08-25 10:16
+    now = datetime(2026, 8, 26, 2, 10, tzinfo=timezone.utc)    # KST 08-26 11:10
+    state = FakeState(last_batch_result="ok", last_batch_at=last)
+
+    verdict, reasons = evaluate_batch_health(state, now)
+
+    assert verdict == VERDICT_STALE
+    assert any("오늘(2026-08-26) 배치 기록이 없습니다" in r for r in reasons)
+    assert any("스케줄러" in r for r in reasons)
+
+
+def test_no_alarm_before_the_deadline_while_catch_up_may_still_run():
+    """회수 실행이 점검 시각보다 늦게 끝나는 날이 있다 (8/25 는 10:16 종료).
+
+    마감 시각 전에는 오늘자 기록이 없어도 조용해야 한다.
+    """
+    last = datetime(2026, 8, 25, 1, 16, tzinfo=timezone.utc)   # KST 08-25 10:16
+    now = datetime(2026, 8, 26, 0, 40, tzinfo=timezone.utc)    # KST 08-26 09:40
+    state = FakeState(last_batch_result="ok", last_batch_at=last)
+
+    assert evaluate_batch_health(state, now)[0] == VERDICT_OK
+
+
+def test_ok_after_deadline_when_today_already_ran():
+    last = datetime(2026, 8, 26, 0, 5, tzinfo=timezone.utc)    # KST 08-26 09:05
+    now = datetime(2026, 8, 26, 5, 0, tzinfo=timezone.utc)     # KST 08-26 14:00
+    state = FakeState(last_batch_result="ok", last_batch_at=last)
+
+    assert evaluate_batch_health(state, now)[0] == VERDICT_OK
+
+
+def test_deadline_hour_is_configurable(monkeypatch):
+    monkeypatch.setenv("BATCH_DUE_DEADLINE_HOUR", "9")
+    last = datetime(2026, 8, 25, 1, 16, tzinfo=timezone.utc)   # KST 08-25 10:16
+    now = datetime(2026, 8, 26, 0, 40, tzinfo=timezone.utc)    # KST 08-26 09:40
+
+    state = FakeState(last_batch_result="ok", last_batch_at=last)
+    assert evaluate_batch_health(state, now)[0] == VERDICT_STALE
+
+
+def test_raised_age_limit_disables_the_daily_rule(monkeypatch):
+    """허용치를 늘리면 조용해진다는 기존 계약을 날짜 규칙이 깨지 않아야 한다."""
+    monkeypatch.setenv("BATCH_MAX_AGE_HOURS", "48")
+    last = datetime(2026, 8, 25, 1, 16, tzinfo=timezone.utc)
+    now = datetime(2026, 8, 26, 2, 10, tzinfo=timezone.utc)
+
+    state = FakeState(last_batch_result="ok", last_batch_at=last)
+    assert evaluate_batch_health(state, now)[0] == VERDICT_OK
+
+
 def test_unknown_when_no_record():
     verdict, reasons = evaluate_batch_health(FakeState(), NOW)
     assert verdict == VERDICT_UNKNOWN

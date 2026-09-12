@@ -6,22 +6,41 @@
 
 잡아야 하는 두 가지 이상:
   A. 배치가 돌았지만 실패했다      → last_batch_result == "fail"
-  B. 배치가 아예 돌지 않았다        → last_batch_at 이 기준 시각보다 오래됐다
+  B. 배치가 아예 돌지 않았다        → 아래 두 규칙 중 하나에 걸린다
      (스케줄러 고장, VM 꺼짐/로그아웃, 잠금 파일 잔존 등)
+
+B 를 두 규칙으로 보는 이유 (2026-08-26 실패 사례):
+
+  8/25 배치가 회수 실행으로 10:16 KST 에 늦게 돌았고, 8/26 배치는 아예 돌지
+  않았다. 그런데 8/26 09:40 점검 시점의 경과는 **23.4시간**이라 허용치(26시간)
+  안이었다. 워치독은 '정상' 을 반환했고 그날 하루를 통째로 놓쳤다.
+
+  경과 시간만 보면 **직전 배치가 늦을수록 다음 날 미실행을 못 잡는다.** 허용치를
+  24시간으로 낮춰도 이 사례(23.4시간)는 여전히 통과한다. 그래서 '오늘자(현지 기준)
+  성공 기록이 있는가' 를 함께 본다. 이쪽이 사람이 실제로 기대하는 조건이다.
+
+  다만 회수 실행이 점검 시각보다 늦게 끝나는 날이 있으므로(8/25 는 10:16 에 종료),
+  마감 시각 이전에는 이 규칙을 적용하지 않는다. 마감 시각은 회수 실행이 끝나고도
+  남을 만큼 늦어야 한다.
 """
 
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Tuple
 
+from writer.timebase import to_local
+
 VERDICT_OK = "정상"
 VERDICT_FAILED = "이상 — 마지막 배치가 실패했습니다"
 VERDICT_STALE = "이상 — 배치가 예정대로 실행되지 않았습니다"
 VERDICT_UNKNOWN = "확인 필요 — 배치 실행 기록이 없습니다"
 
-# 마지막 성공으로부터 이 시간이 지나면 '안 돌았다'로 본다.
-# 일일 배치(08:50) 기준으로 하루를 넘기면 이상이다.
+# 마지막 성공으로부터 이 시간이 지나면 '안 돌았다'로 본다 (뒷단 안전망).
 DEFAULT_MAX_AGE_HOURS = 26
+
+# 현지(KST) 기준 이 시각을 넘기면 '오늘자 배치 기록'이 있어야 한다.
+# 일일 배치는 08:50 이고 회수 실행이 10:16 에 끝난 날도 있었으므로 넉넉히 잡는다.
+DEFAULT_DUE_DEADLINE_HOUR = 11
 
 
 def max_age_hours() -> int:
@@ -32,6 +51,17 @@ def max_age_hours() -> int:
         return max(1, int(raw))
     except ValueError:
         return DEFAULT_MAX_AGE_HOURS
+
+
+def due_deadline_hour() -> int:
+    """이 시각(현지) 이후로는 오늘자 배치 기록이 없으면 이상으로 본다."""
+    raw = os.getenv("BATCH_DUE_DEADLINE_HOUR")
+    if not raw:
+        return DEFAULT_DUE_DEADLINE_HOUR
+    try:
+        return min(23, max(0, int(raw)))
+    except ValueError:
+        return DEFAULT_DUE_DEADLINE_HOUR
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -66,16 +96,38 @@ def evaluate_batch_health(
     if last_at is None:
         return VERDICT_UNKNOWN, ["마지막 배치 시각이 기록되지 않았습니다."]
 
-    age = now_utc - _as_utc(last_at)
+    last_at_utc = _as_utc(last_at)
+    age = now_utc - last_at_utc
+    hours = int(age.total_seconds() // 3600)
+    check_hint = (
+        "스케줄러(autoNote_DailyBatch), VM 로그인 상태, var/batch.lock 잔존을 확인하십시오."
+    )
+
     if age > timedelta(hours=limit_hours):
-        hours = int(age.total_seconds() // 3600)
         reasons.append(
             f"마지막 성공 배치가 {hours}시간 전입니다 (허용 {limit_hours}시간)."
         )
-        reasons.append(
-            "스케줄러(autoNote_DailyBatch), VM 로그인 상태, var/batch.lock 잔존을 확인하십시오."
-        )
+        reasons.append(check_hint)
         return VERDICT_STALE, reasons
 
-    hours = int(age.total_seconds() // 3600)
+    # 경과 시간이 허용치 안이어도, 오늘 돌았어야 할 배치가 없으면 이상이다.
+    # 직전 배치가 늦게 끝난 날에는 경과 시간만으로 미실행을 잡을 수 없다.
+    #
+    # 단, 허용치를 기본값보다 크게 잡았다면 매일 도는 배치가 아니라는 선언으로 보고
+    # 이 규칙을 적용하지 않는다. BATCH_MAX_AGE_HOURS 를 늘리면 조용해진다는 기존
+    # 계약을 깨지 않기 위해서다.
+    now_local = to_local(now_utc)
+    last_local = to_local(last_at_utc)
+    if (
+        limit_hours <= DEFAULT_MAX_AGE_HOURS
+        and now_local.hour >= due_deadline_hour()
+        and last_local.date() < now_local.date()
+    ):
+        reasons.append(
+            f"오늘({now_local:%Y-%m-%d}) 배치 기록이 없습니다. "
+            f"마지막 성공은 {last_local:%Y-%m-%d %H:%M} 이고 {hours}시간 전입니다."
+        )
+        reasons.append(check_hint)
+        return VERDICT_STALE, reasons
+
     return VERDICT_OK, [f"마지막 성공 배치가 {hours}시간 전입니다."]

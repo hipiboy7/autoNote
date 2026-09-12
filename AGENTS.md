@@ -206,7 +206,7 @@ python -m autonote.main --mode backfill --from-id 700 --to-id 750
 워치독은 배치와 **독립적으로** 스케줄에 걸어야 의미가 있다. 등록:
 
 ```
-schtasks /create /tn "autoNote_HealthCheck" /tr "D:\autoNote\cli\run_health_check.bat" /sc daily /st 09:40 /f
+schtasks /create /tn "autoNote_HealthCheck" /tr "D:\autoNote\cli\run_health_check.bat" /sc daily /st 11:10 /f
 ```
 
 같은 이상을 하루에 여러 번 통보하지 않도록 `last_alert_date` 로 억제하고, 배치가 성공하면 억제를 해제한다. 실패 → 성공으로 바뀐 경우에만 복구 알림을 보낸다 (매일 성공 알림은 보내지 않는다).

@@ -24,7 +24,7 @@ D:\autoNote\
 │
 ├── cli/                    ← 실행 진입점 (스케줄러가 가리키는 곳)
 │   ├── run_daily_batch.bat     매일 08:50 스케줄러가 실행
-│   ├── run_health_check.bat    매일 09:40 배치 이상 감시
+│   ├── run_health_check.bat    매일 11:10 배치 이상 감시
 │   ├── run_backfill.bat        구간 재처리
 │   ├── startup_agy.bat         VM 로그인 시 agy 기동
 │   └── check_batch_health.py   워치독 본체
