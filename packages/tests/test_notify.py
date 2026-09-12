@@ -163,3 +163,23 @@ def test_docs_banner_uses_block_format():
     _doc_id, block = docs.appended[0]
     assert block.startswith("━━━━━━━━━━━━━━━━━━\n")
     assert ALERT_HEADER in block
+
+
+def test_notify_warning_uses_warning_header_and_both_channels():
+    """성공했지만 봐야 할 일이 있을 때 쓰는 알림. 실패(🚨)·복구(✅)와 구분돼야 한다."""
+    from autonote.notify import WARN_HEADER
+
+    tg, docs = FakeTelegram(), FakeDocs()
+    ok = notifier(tg, docs).notify_warning(
+        summary="배치는 완료했지만 판별 폴백이 있습니다.",
+        detail="판별 워커 실패로 2건이 검증 없이 기록되었습니다: r201, r202",
+        context=CONTEXT,
+    )
+
+    assert ok is True
+    body = tg.sent[0][1]
+    assert body.startswith(WARN_HEADER)
+    assert "r201, r202" in body
+    assert ALERT_HEADER not in body
+    assert OK_HEADER not in body
+    assert docs.appended[0][1].startswith("━━━━━━━━━━━━━━━━━━\n■ " + WARN_HEADER)

@@ -11,7 +11,7 @@
 """
 
 import sys
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Set
 
 from agy_gateway import WorkerRunner, WorkerSpec, WorkerUnavailableError
 from pydantic import BaseModel, Field
@@ -33,6 +33,9 @@ SKIP_KEYWORDS = (
 REASON_NO_BODY = "본문 없음(미디어 전용)"
 REASON_LINK_ONLY = "링크만 있음"
 REASON_KEYWORD = "광고·공지 키워드"
+# triage 워커가 실패했거나 결과를 누락해 보수적 기본값으로 채운 경우.
+# 검증 없이 기록된 글이 있다는 뜻이므로 main 이 이 건수를 성공 알림에 실는다.
+REASON_FALLBACK = "판별 결과 누락 — 보수적 기본값 적용"
 
 
 class TriageDecision(BaseModel):
@@ -77,6 +80,9 @@ class ResearchTriage:
         # 워커 장애 시 보수적으로 '포함' 처리한다. 분석 단계에서 다시 검증되므로
         # 글을 잃는 것보다 안전하다.
         self.include_on_failure = include_on_failure
+        # 직전 classify() 에서 워커 판별 없이 기본값으로 처리된 message_id.
+        # 워커가 실패하면 후보 전원이 여기 들어온다 (2026-09-04 실제 발생).
+        self.fallback_ids: Set[int] = set()
 
     # ------------------------------------------------- 프로그램 확정 판단 (토큰 0)
 
@@ -101,6 +107,7 @@ class ResearchTriage:
         """사전 필터를 통과한 메시지에 대해 리서치 여부를 판별한다."""
         decisions: Dict[int, TriageDecision] = {}
         candidates: List[TelegramMessage] = []
+        self.fallback_ids = set()
 
         for msg in messages:
             reason = self.obvious_skip_reason(msg)
@@ -168,9 +175,10 @@ class ResearchTriage:
 
         # 누락된 항목은 보수적 기본값으로 채운다 (글을 잃지 않는 쪽)
         for msg_id in requested - set(decisions):
+            self.fallback_ids.add(msg_id)
             decisions[msg_id] = TriageDecision(
                 message_id=msg_id,
                 is_research=self.include_on_failure,
-                reason="판별 결과 누락 — 보수적 기본값 적용",
+                reason=REASON_FALLBACK,
             )
         return decisions

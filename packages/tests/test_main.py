@@ -324,3 +324,62 @@ def test_progress_survives_a_kill_in_the_middle(mock_pipeline_services):
     # 103 은 완료 전에 죽었으므로 저장되지 않아야 한다 (다음 실행에서 재시도).
     assert 102 in saved_ids, f"완료된 메시지가 저장되지 않았습니다: {saved_ids}"
     assert 103 not in saved_ids, f"미완료 메시지가 저장됐습니다 (유실 위험): {saved_ids}"
+
+
+
+# ------------------------------------------------------------- triage 폴백 가시화
+
+def _state_manager_with(last_message_id=785):
+    sm = MagicMock()
+    sm.load_state.return_value = MagicMock(last_message_id=last_message_id)
+    return sm
+
+
+def test_triage_fallback_count_appears_in_triage_summary(mock_pipeline_services, capsys):
+    """폴백 건수는 배치 로그의 Triage 요약 줄에도 남아야 한다."""
+    collector, triage, analyzer, writer, merger, reviewer, state_manager = mock_pipeline_services
+    triage.fallback_ids = {102, 103}
+
+    run_batch(
+        collector=collector, triage=triage, analyzer=analyzer, writer=writer,
+        merger=merger, reviewer=reviewer, thought_doc_id="thought",
+        original_doc_resolver=lambda dt: "orig_doc", doc_mappings=DOC_MAPPINGS,
+        channel_id=CHANNEL, base_date=datetime(2026, 7, 18, 12, 0, 0),
+    )
+
+    assert "판별 폴백 2건 [102, 103]" in capsys.readouterr().out
+
+
+def test_success_report_is_silent_when_nothing_to_flag():
+    """평소 성공은 조용히 지나간다. 매번 알리면 곧 무시된다."""
+    from autonote.main import report_batch_success
+
+    notifier = MagicMock()
+    report_batch_success(notifier, _state_manager_with(), "ok", [], datetime(2026, 9, 13, 8, 50))
+
+    notifier.notify_warning.assert_not_called()
+    notifier.notify_recovery.assert_not_called()
+
+
+def test_success_report_warns_when_triage_fell_back():
+    from autonote.main import report_batch_success
+
+    notifier = MagicMock()
+    report_batch_success(notifier, _state_manager_with(), "ok", [201, 202], datetime(2026, 9, 13, 8, 50))
+
+    notifier.notify_recovery.assert_not_called()
+    kwargs = notifier.notify_warning.call_args.kwargs
+    assert "2건" in kwargs["detail"]
+    assert "r201, r202" in kwargs["detail"]
+    assert kwargs["context"].last_message_id == 785
+
+
+def test_success_report_folds_fallback_into_recovery_notice():
+    """복구와 폴백이 겹치면 한 통으로 보낸다."""
+    from autonote.main import report_batch_success
+
+    notifier = MagicMock()
+    report_batch_success(notifier, _state_manager_with(), "fail", [301], datetime(2026, 9, 13, 8, 50))
+
+    notifier.notify_warning.assert_not_called()
+    assert "r301" in notifier.notify_recovery.call_args.kwargs["summary"]

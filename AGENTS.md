@@ -194,7 +194,8 @@ python -m autonote.main --mode backfill --from-id 700 --to-id 750
 | 이상 유형 | 감지 주체 | 동작 |
 |---|---|---|
 | **배치가 돌았지만 실패** | `main.py` 의 batch 모드 | 예외를 잡아 `state.json` 에 `last_batch_result="fail"` 과 오류를 기록하고 알림 발송 후 예외를 재전파 (exit 1 유지) |
-| **배치가 아예 돌지 않음** (스케줄러 고장, VM 꺼짐/로그아웃, `batch.lock` 잔존) | 워치독 `cli/check_batch_health.py` | `last_batch_at` 이 `BATCH_MAX_AGE_HOURS`(기본 26h)보다 오래되면 알림 발송 |
+| **배치가 아예 돌지 않음** (스케줄러 고장, VM 꺼짐/로그아웃, `batch.lock` 잔존) | 워치독 `cli/check_batch_health.py` | `last_batch_at` 이 `BATCH_MAX_AGE_HOURS`(기본 26h)보다 오래되거나, 현지 `BATCH_DUE_DEADLINE_HOUR`(기본 11시) 이후 오늘자 기록이 없으면 알림 발송 |
+| **배치는 성공했지만 판별이 폴백됨** (triage 워커 실패 → 후보 전원을 검증 없이 리서치로 간주·기록) | `main.py` 의 `report_batch_success` | ⚠️ 주의 알림으로 폴백 건수와 식별자(`rNNN`)를 보낸다. 복구 알림과 겹치면 한 통에 싣는다. 2026-09-04 에 알림 없이 발생한 사례가 계기 |
 
 전달 경로는 두 개를 병행하며, 하나가 죽어도 다른 하나로 간다. **알림 실패가 배치를 중단시키지 않는다.**
 
@@ -209,7 +210,7 @@ python -m autonote.main --mode backfill --from-id 700 --to-id 750
 schtasks /create /tn "autoNote_HealthCheck" /tr "D:\autoNote\cli\run_health_check.bat" /sc daily /st 11:10 /f
 ```
 
-같은 이상을 하루에 여러 번 통보하지 않도록 `last_alert_date` 로 억제하고, 배치가 성공하면 억제를 해제한다. 실패 → 성공으로 바뀐 경우에만 복구 알림을 보낸다 (매일 성공 알림은 보내지 않는다).
+같은 이상을 하루에 여러 번 통보하지 않도록 `last_alert_date` 로 억제하고, 배치가 성공하면 억제를 해제한다. 실패 → 성공으로 바뀐 경우에만 복구 알림을 보낸다 (매일 성공 알림은 보내지 않는다). 예외는 하나 — **triage 폴백으로 기록된 글이 있으면** 성공이어도 ⚠️ 주의 알림을 보낸다. 검증 없이 문서에 들어간 글이 있다는 뜻이라 조용히 넘기면 아무도 모른다.
 
 ### 스케줄 작업이 반드시 가져야 할 설정
 

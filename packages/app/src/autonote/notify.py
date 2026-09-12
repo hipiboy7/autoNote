@@ -23,6 +23,7 @@ from typing import List, Optional, Protocol
 
 ALERT_HEADER = "🚨 autoNote 배치 이상"
 OK_HEADER = "✅ autoNote 배치 정상 복구"
+WARN_HEADER = "⚠️ autoNote 배치 주의"
 MAX_DETAIL_CHARS = 700
 
 
@@ -104,6 +105,28 @@ class BatchNotifier:
             lines += ["", *context.lines()]
         body = "\n".join(lines)
         return self._dispatch(body, docs_body=self._build_docs_block(OK_HEADER, body))
+
+    def notify_warning(
+        self,
+        summary: str,
+        detail: str = "",
+        context: Optional[AlertContext] = None,
+    ) -> bool:
+        """배치는 성공했지만 사람이 봐야 할 일이 있을 때 알린다.
+
+        실패 알림(🚨)과 구분한다. 예: triage 워커가 실패해 후보 전원이 검증 없이
+        리서치로 간주·기록된 경우 — 배치 결과는 ok 지만 비리서치 글이 테마 문서에
+        섞였을 수 있다. 조용히 넘기면 아무도 모른다 (2026-09-04 실제 발생).
+        """
+        lines = [WARN_HEADER, "", summary]
+        if context:
+            lines += ["", *context.lines()]
+        if detail:
+            lines += ["", _clip(detail)]
+        if context and context.hint:
+            lines += ["", context.hint]
+        body = "\n".join(lines)
+        return self._dispatch(body, docs_body=self._build_docs_block(WARN_HEADER, body))
 
     # -------------------------------------------------------------------- 내부
 

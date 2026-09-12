@@ -147,3 +147,30 @@ def test_unrequested_decision_is_ignored():
     out = triage.classify([msg(50, "판단")])
 
     assert set(out) == {50}
+
+
+def test_fallback_ids_track_posts_recorded_without_worker_verdict():
+    """워커 실패로 기본값 처리된 글은 fallback_ids 에 남아, 배치가 알림에 실을 수 있어야 한다.
+
+    2026-09-04 에 triage 워커가 실패해 후보 전원이 추출·기록됐는데 아무 알림이 없었다.
+    """
+    from collector.triage import REASON_FALLBACK
+
+    runner = ScriptedRunner([WorkerUnavailableError("agy 실패")])
+    triage = ResearchTriage(runner, spec())
+
+    out = triage.classify([msg(30, "판단 A"), msg(31, "판단 B")])
+
+    assert triage.fallback_ids == {30, 31}
+    assert out[30].reason == REASON_FALLBACK
+
+
+def test_fallback_ids_reset_between_runs():
+    runner = ScriptedRunner([WorkerUnavailableError("agy 실패"), decisions((50, True))])
+    triage = ResearchTriage(runner, spec())
+
+    triage.classify([msg(40, "판단")])
+    assert triage.fallback_ids == {40}
+
+    triage.classify([msg(50, "판단")])
+    assert triage.fallback_ids == set()

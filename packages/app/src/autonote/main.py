@@ -2,7 +2,7 @@ import os
 import sys
 import argparse
 from datetime import datetime, timezone
-from typing import Callable, Dict
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 # 라이브러리 및 서비스 모듈 import
 from agy_gateway import AgyCliRunner
@@ -81,6 +81,65 @@ def resolve_original_doc(msg_date: datetime, original_doc_mappings: Dict[str, st
     month_key = msg_date.strftime("%Y-%m")
     return original_doc_mappings.get(month_key, fallback_doc_id)
 
+def triage_fallback_ids(triage: Any) -> List[int]:
+    """triage 워커 판별 없이 기본값으로 처리된 message_id 목록 (없으면 빈 리스트).
+
+    테스트의 MagicMock 같은 대체 객체도 들어오므로 실제 집합/리스트일 때만 읽는다.
+    """
+    ids = getattr(triage, "fallback_ids", None)
+    if isinstance(ids, (set, frozenset, list, tuple)):
+        return sorted(int(i) for i in ids)
+    return []
+
+
+def report_batch_success(
+    notifier: BatchNotifier,
+    state_manager: Any,
+    previous_result: Optional[str],
+    fallback_ids: Sequence[int],
+    now: datetime,
+) -> None:
+    """성공 배치 뒤의 알림을 결정한다.
+
+    평소 성공은 조용히 지나간다 — 매번 알리면 곧 무시된다. 알리는 경우는 둘이다.
+      * 직전 실행이 실패였다             → 복구 알림 (기존)
+      * triage 폴백으로 기록된 글이 있다  → 주의 알림. 검증 없이 기록된 글이 있다는 뜻이다.
+    둘이 겹치면 복구 알림 한 통에 폴백 내용을 함께 싣는다.
+
+    2026-09-04 에 triage 워커가 실패해 후보 전원이 추출·기록됐는데 아무 알림이 없었다.
+    """
+    fallback_note = ""
+    if fallback_ids:
+        ids = ", ".join(f"r{i}" for i in fallback_ids)
+        fallback_note = (
+            f"판별(triage) 워커가 실패해 {len(fallback_ids)}건이 검증 없이 리서치로 "
+            f"간주되어 추출·기록되었습니다: {ids}"
+        )
+
+    state = state_manager.load_state()
+    context = AlertContext(
+        mode="batch",
+        when=now,
+        last_message_id=state.last_message_id,
+        hint=(
+            "폴백된 글이 잡담·링크였다면 테마 문서에 잘못 섞였을 수 있습니다. "
+            "문서에서 위 식별자를 확인하십시오."
+        ) if fallback_ids else "",
+    )
+
+    if previous_result == "fail":
+        summary = "이전 실행 실패 후 이번 배치는 정상 완료되었습니다."
+        if fallback_note:
+            summary += "\n\n" + fallback_note
+        notifier.notify_recovery(summary=summary, context=context)
+    elif fallback_ids:
+        notifier.notify_warning(
+            summary="일일 배치는 정상 완료했지만 판별 단계가 폴백으로 처리된 글이 있습니다.",
+            detail=fallback_note,
+            context=context,
+        )
+
+
 def run_weekly_review_if_due(
     collector: MessageCollector,
     reviewer: WeeklyReviewer,
@@ -153,10 +212,12 @@ def run_batch(
         m.id for m in new_messages
         if decisions[m.id].reason == REASON_NO_BODY
     }
+    fallback_ids = triage_fallback_ids(triage)
     print(
         f"[Batch] Triage: research={len(research_ids)}, "
         f"skipped={len(new_messages) - len(research_ids)} "
         f"(본문 없음 {len(no_body_ids)}건)"
+        + (f", 판별 폴백 {len(fallback_ids)}건 {fallback_ids}" if fallback_ids else "")
     )
 
     # 4. 리서치 글을 배치로 분석. 실패하면 아무것도 기록하지 않고 중단한다.
@@ -479,14 +540,13 @@ def main():
             raise
 
         previous = state_manager.record_batch_result(ok=True)
-        if previous == "fail":
-            state = state_manager.load_state()
-            notifier.notify_recovery(
-                summary="이전 실행 실패 후 이번 배치는 정상 완료되었습니다.",
-                context=AlertContext(
-                    mode="batch", when=now, last_message_id=state.last_message_id
-                ),
-            )
+        report_batch_success(
+            notifier=notifier,
+            state_manager=state_manager,
+            previous_result=previous,
+            fallback_ids=triage_fallback_ids(triage),
+            now=now,
+        )
     elif args.mode == "merge":
         print("Running manual Merge mode...")
         merger.merge_thoughts(thought_doc_id)
