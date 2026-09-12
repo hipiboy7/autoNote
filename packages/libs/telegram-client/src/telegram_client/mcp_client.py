@@ -2,6 +2,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import queue
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -15,6 +17,54 @@ from .interface import TelegramClient, TelegramMessage
 # 이 이유로 3일간 실패했다). TELEGRAM_MCP_DIR 로 언제든 덮어쓸 수 있다.
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 DEFAULT_MCP_DIR = str(_REPO_ROOT / "vendor" / "telegram-mcp")
+
+
+# ---------------------------------------------------------------- 응답 대기 상한
+# 2026-09-12 배치가 Google Docs MCP 응답을 기다리며 6시간 넘게 멈췄다. readline() 에
+# 타임아웃이 없어 서버가 침묵하면 배치가 영원히 잠금을 쥔 채 서 있고, 다음 날 예약
+# 실행까지 IgnoreNew 로 건너뛰어진다. 응답 대기에는 반드시 상한을 둔다.
+# (google-docs-client 에도 같은 헬퍼가 있다. 라이브러리 간 의존을 만들지 않기 위해 둘로 둔다.)
+DEFAULT_MCP_READ_TIMEOUT_SECONDS = 120.0
+
+
+class MCPReadTimeout(RuntimeError):
+    """MCP 서버가 제한 시간 안에 한 줄도 응답하지 않았다."""
+
+
+def read_timeout_seconds() -> float:
+    raw = os.getenv("MCP_READ_TIMEOUT_SECONDS")
+    if not raw:
+        return DEFAULT_MCP_READ_TIMEOUT_SECONDS
+    try:
+        return max(0.1, float(raw))
+    except ValueError:
+        return DEFAULT_MCP_READ_TIMEOUT_SECONDS
+
+
+def readline_with_timeout(stream, timeout: float) -> str:
+    """stream.readline() 을 별도 스레드에서 수행하고 timeout 안에 못 받으면 예외를 낸다.
+
+    Windows 파이프는 select 가 안 되므로 스레드+큐로 상한을 건다. 타임아웃이 나면
+    읽기 스레드는 파이프에 매달린 채 남는데, 호출자가 서버 프로세스를 죽이면 EOF 를
+    받고 스스로 끝난다. 스트림이 닫혔거나(mock 소진 포함) 읽기 자체가 실패하면 EOF("") 로
+    본다 — 기존 '스트림 닫힘' 처리 경로를 그대로 타게 하기 위해서다.
+    """
+    box: "queue.Queue[str]" = queue.Queue(maxsize=1)
+
+    def _reader() -> None:
+        try:
+            box.put(stream.readline())
+        except Exception:  # noqa: BLE001 - StopIteration/ValueError 등은 곧 EOF 다
+            box.put("")
+
+    threading.Thread(target=_reader, daemon=True).start()
+    try:
+        return box.get(timeout=timeout)
+    except queue.Empty:
+        raise MCPReadTimeout(
+            f"MCP 서버가 {timeout:.0f}초 안에 응답하지 않았습니다. "
+            "서버 프로세스를 종료하고 이 호출을 실패로 처리합니다."
+        ) from None
 
 
 class MCPTelegramClient(TelegramClient):
@@ -53,7 +103,8 @@ class MCPTelegramClient(TelegramClient):
         한 줄만 읽고 파싱하면 깨진다.
         """
         while True:
-            line = proc.stdout.readline()
+            # 타임아웃이면 MCPReadTimeout 이 올라가고, _call_tool 의 finally 가 서버를 종료한다.
+            line = readline_with_timeout(proc.stdout, read_timeout_seconds())
             if not line:
                 raise RuntimeError(
                     "Telegram MCP 서버가 응답 없이 스트림을 닫았습니다."

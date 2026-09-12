@@ -180,3 +180,26 @@ def test_default_mcp_dir_points_at_an_existing_vendor_path():
 
     assert DEFAULT_MCP_DIR.replace(chr(92), "/").endswith("vendor/telegram-mcp")
     assert os.path.isdir(DEFAULT_MCP_DIR), DEFAULT_MCP_DIR
+
+
+@patch("telegram_client.mcp_client.subprocess.Popen")
+def test_list_messages_times_out_instead_of_hanging(mock_popen, mcp_dir, monkeypatch):
+    """서버가 한 줄도 답하지 않으면 제한 시간 뒤 실패로 끝나야 한다 (무한 대기 금지)."""
+    import time
+
+    monkeypatch.setenv("MCP_READ_TIMEOUT_SECONDS", "0.2")
+    proc = MagicMock()
+
+    def silent_readline():
+        time.sleep(5)
+        return ""
+
+    proc.stdout.readline.side_effect = silent_readline
+    mock_popen.return_value = proc
+
+    client = MCPTelegramClient(mcp_dir=str(mcp_dir))
+    with pytest.raises(RuntimeError) as exc:
+        client.list_messages("-1004421517798", limit=5)
+
+    assert "응답하지 않았습니다" in str(exc.value)
+    proc.terminate.assert_called()

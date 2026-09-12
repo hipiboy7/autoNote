@@ -247,3 +247,34 @@ def test_mcp_client_replace_line_returns_false_when_target_remains(mock_popen, c
     assert "대상 문자열이 그대로 남아 있습니다" in capsys.readouterr().err
 
 
+
+
+def test_read_json_line_times_out_and_abandons_server(monkeypatch):
+    """MCP 서버가 침묵하면 무한 대기하지 않는다.
+
+    2026-09-12 배치가 docs.writeText 응답을 기다리며 6시간 넘게 멈춰 잠금을 쥐고
+    있었고, 다음 날 예약 실행이 IgnoreNew 로 건너뛰어질 상황이었다.
+    """
+    import time
+    from google_docs_client.mcp_client import MCPReadTimeout
+
+    monkeypatch.setenv("MCP_READ_TIMEOUT_SECONDS", "0.2")
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_popen.return_value = mock_proc
+        answers = [json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}})]  # initialize 만 응답
+
+        def silent_readline():
+            if answers:
+                return answers.pop(0)
+            time.sleep(5)
+            return ""
+
+        mock_proc.stdout.readline.side_effect = silent_readline
+
+        client = MCPGoogleDocsClient()
+        with pytest.raises(MCPReadTimeout):
+            client._send_request("tools/call", {"name": "docs.readText", "arguments": {}})
+
+        mock_proc.kill.assert_called_once()
+        assert client.process is None  # 다음 호출은 새 서버를 띄운다

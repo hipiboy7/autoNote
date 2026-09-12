@@ -112,3 +112,28 @@ def test_writer_pre_fills_thought_note(mock_client, sample_message):
     assert "- [t305]" in written
     assert "삼성전자 HBM 실적 전망" in written
     assert "▶ 💭 내 생각:" in written
+
+
+def test_writer_raises_when_append_fails(sample_message, sample_report):
+    """append_text 가 False 를 돌려주면 처리 완료로 넘어가지 말고 예외로 세워야 한다.
+
+    배치 루프는 writer 의 반환값을 보지 않으므로, False 를 돌려주면 문서에 없는 글이
+    '처리됨' 으로 기록돼 조용히 유실된다 (2026-09-13 확인).
+    """
+    import pytest
+    from writer.service import DocsWriteError, ResearchWriter
+
+    class FailingClient:
+        def append_text(self, doc_id, text):
+            return False
+
+        def apply_sepia_theme(self, doc_id):
+            return True
+
+    writer = ResearchWriter(FailingClient())
+    with pytest.raises(DocsWriteError):
+        writer.write_original_backup("doc", sample_message, title="t")
+    with pytest.raises(DocsWriteError):
+        writer.write_research_report("doc", sample_message, sample_report, prefix="r", title="t")
+    with pytest.raises(DocsWriteError):
+        writer.pre_fill_thought_note("doc", sample_message, prefix="r", title="t")

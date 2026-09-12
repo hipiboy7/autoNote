@@ -3,11 +3,61 @@ import re
 import sys
 import json
 import subprocess
+import threading
+import queue
 from typing import Any, List, Optional
 from .docs_rest import DocsRestClient
 from .docs_style import SepiaThemeApplier
 from .google_auth import GoogleTokenProvider
 from .interface import GoogleDocsClient
+
+# ---------------------------------------------------------------- 응답 대기 상한
+# 2026-09-12 배치가 Google Docs MCP 응답을 기다리며 6시간 넘게 멈췄다. readline() 에
+# 타임아웃이 없어 서버가 침묵하면 배치가 영원히 잠금을 쥔 채 서 있고, 다음 날 예약
+# 실행까지 IgnoreNew 로 건너뛰어진다. 응답 대기에는 반드시 상한을 둔다.
+# (telegram-client 에도 같은 헬퍼가 있다. 라이브러리 간 의존을 만들지 않기 위해 둘로 둔다.)
+DEFAULT_MCP_READ_TIMEOUT_SECONDS = 120.0
+
+
+class MCPReadTimeout(RuntimeError):
+    """MCP 서버가 제한 시간 안에 한 줄도 응답하지 않았다."""
+
+
+def read_timeout_seconds() -> float:
+    raw = os.getenv("MCP_READ_TIMEOUT_SECONDS")
+    if not raw:
+        return DEFAULT_MCP_READ_TIMEOUT_SECONDS
+    try:
+        return max(0.1, float(raw))
+    except ValueError:
+        return DEFAULT_MCP_READ_TIMEOUT_SECONDS
+
+
+def readline_with_timeout(stream, timeout: float) -> str:
+    """stream.readline() 을 별도 스레드에서 수행하고 timeout 안에 못 받으면 예외를 낸다.
+
+    Windows 파이프는 select 가 안 되므로 스레드+큐로 상한을 건다. 타임아웃이 나면
+    읽기 스레드는 파이프에 매달린 채 남는데, 호출자가 서버 프로세스를 죽이면 EOF 를
+    받고 스스로 끝난다. 스트림이 닫혔거나(mock 소진 포함) 읽기 자체가 실패하면 EOF("") 로
+    본다 — 기존 '스트림 닫힘' 처리 경로를 그대로 타게 하기 위해서다.
+    """
+    box: "queue.Queue[str]" = queue.Queue(maxsize=1)
+
+    def _reader() -> None:
+        try:
+            box.put(stream.readline())
+        except Exception:  # noqa: BLE001 - StopIteration/ValueError 등은 곧 EOF 다
+            box.put("")
+
+    threading.Thread(target=_reader, daemon=True).start()
+    try:
+        return box.get(timeout=timeout)
+    except queue.Empty:
+        raise MCPReadTimeout(
+            f"MCP 서버가 {timeout:.0f}초 안에 응답하지 않았습니다. "
+            "서버 프로세스를 종료하고 이 호출을 실패로 처리합니다."
+        ) from None
+
 
 class MCPGoogleDocsClient(GoogleDocsClient):
     def __init__(self, mcp_cmd: Optional[List[str]] = None):
@@ -52,7 +102,12 @@ class MCPGoogleDocsClient(GoogleDocsClient):
     def _read_json_line(self) -> dict:
         """stdout에서 non-JSON 라인을 넘겨버리고 올바른 JSON-RPC 응답만 파싱한다."""
         while True:
-            res_str = self.process.stdout.readline()
+            try:
+                res_str = readline_with_timeout(self.process.stdout, read_timeout_seconds())
+            except MCPReadTimeout:
+                # 침묵하는 서버는 버린다. 다음 호출이 _ensure_connected 로 새로 띄운다.
+                self._abandon_process()
+                raise
             if not res_str:
                 raise RuntimeError("MCP server closed stream unexpectedly.")
             res_str = res_str.strip()
@@ -63,6 +118,17 @@ class MCPGoogleDocsClient(GoogleDocsClient):
                 return json.loads(res_str)
             except json.JSONDecodeError:
                 continue
+
+    def _abandon_process(self) -> None:
+        """응답 없는 서버를 강제 종료하고 연결 상태를 초기화한다."""
+        proc, self.process = self.process, None
+        if proc is None:
+            return
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+        print("[MCPGoogleDocsClient] 응답 없는 MCP 서버를 종료했습니다. 다음 호출에서 재연결합니다.", file=sys.stderr)
 
     def _send_request(self, method: str, params: dict) -> dict:
         self._ensure_connected()

@@ -42,6 +42,15 @@ def format_research_block(
     )
 
 
+class DocsWriteError(RuntimeError):
+    """문서 기록이 실패했다. 호출자는 이 메시지를 처리 완료로 표시하면 안 된다.
+
+    append_text 는 실패를 False 로 돌려주는데, 배치 루프는 그 반환값을 보지 않고
+    상태를 전진시켰다. 그러면 문서에 없는 글이 '처리됨' 으로 남아 조용히 유실된다.
+    실패는 예외로 올려 배치를 세우고 알림이 가게 한다 (2026-09-13).
+    """
+
+
 class ResearchWriter:
     def __init__(self, docs_client: GoogleDocsClient):
         self.docs_client = docs_client
@@ -62,7 +71,12 @@ class ResearchWriter:
             "▶ 출처: 피터케이 채널\n"
             f"{msg.text.strip()}\n"
         )
-        return self.docs_client.append_text(doc_id, formatted_text)
+        if not self.docs_client.append_text(doc_id, formatted_text):
+            raise DocsWriteError(
+                f"원문보관 문서({doc_id}) 에 message {msg.id} 를 기록하지 못했습니다. "
+                "기록되지 않은 글을 처리 완료로 남기지 않기 위해 중단합니다."
+            )
+        return True
 
     def write_research_report(
         self, 
@@ -82,6 +96,11 @@ class ResearchWriter:
 
         # 1. 본문 작성
         append_ok = self.docs_client.append_text(doc_id, formatted_text)
+        if not append_ok:
+            raise DocsWriteError(
+                f"테마 문서({doc_id}) 에 {prefix}{msg.id} 분석 블록을 기록하지 못했습니다. "
+                "기록되지 않은 글을 처리 완료로 남기지 않기 위해 중단합니다."
+            )
         # 2. 세피아 배경색 테마 일괄 적용
         theme_ok = self.docs_client.apply_sepia_theme(doc_id)
         
@@ -105,4 +124,9 @@ class ResearchWriter:
             f"- [{prefix}{msg.id}]{link_str} | {title}\n"
             "  ▶ 💭 내 생각:\n"
         )
-        return self.docs_client.append_text(doc_id, formatted_text)
+        if not self.docs_client.append_text(doc_id, formatted_text):
+            raise DocsWriteError(
+                f"생각노트({doc_id}) 에 {prefix}{msg.id} 입력란을 기록하지 못했습니다. "
+                "기록되지 않은 글을 처리 완료로 남기지 않기 위해 중단합니다."
+            )
+        return True
