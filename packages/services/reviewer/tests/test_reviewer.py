@@ -324,3 +324,78 @@ def test_weekly_reviewer_returns_false_on_empty_response():
     assert reviewer.generate_weekly_review("review_doc", datetime(2026, 7, 18)) is False
     assert client.read_text("review_doc") == ""
 
+
+
+def _theme_record(date_str: str, ident: str, claim: str) -> str:
+    return (
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"■ {date_str} | 제목 {ident}\n"
+        f"▶ 식별자: [{ident}]\n"
+        "▶ 출처: 피터케이 채널\n"
+        f"▶ 핵심 주장: {claim}\n"
+        "▶ 근거·데이터:\n"
+        "  - 근거 1\n"
+        "▶ 판단 논리: 논리\n"
+        "▶ 리스크·반대 시나리오:\n"
+        "  - 리스크\n"
+        "▶ 💭 내 생각: 메모\n"
+        "▶ ❓ 생각해볼 질문: 질문?\n"
+    )
+
+
+def test_weekly_review_trims_whole_cards_oldest_first(capsys):
+    """한도를 넘으면 글자 단위가 아니라 카드 단위로, 날짜가 오래된 것부터 뺀다.
+
+    2026-10-19 W41 리뷰에서 글자 수로 자른 탓에 첫 카드의 날짜·제목이 잘려 나갔다.
+    레코드는 문서별로 모이므로 문서 순서가 아니라 날짜 순서로 빼야 한다.
+    """
+    long_claim = "가" * 600
+    # 최신 글이 앞 문서, 오래된 글이 뒤 문서에 있다 — 문서 순서로 자르면 최신 글이 빠진다
+    doc_contents = {
+        "theme_a": _theme_record("2026-07-18", "t1", long_claim)
+                   + _theme_record("2026-07-17", "t2", long_claim),
+        "theme_b": _theme_record("2026-07-12", "t3", long_claim)
+                   + _theme_record("2026-07-13", "t4", long_claim),
+    }
+    client = MockGoogleDocsClient(doc_contents)
+    gateway = MockWorkerRunner(response_text="리뷰 본문")
+    spec = WorkerSpec(name="review", model="claude-opus-5-5-high", max_prompt_chars=2600)
+    reviewer = WeeklyReviewer(
+        docs_client=client,
+        runner=gateway,
+        spec=spec,
+        doc_mappings={"반도체사이클": "theme_a", "금리": "theme_b"},
+    )
+
+    assert reviewer.generate_weekly_review("review_doc", datetime(2026, 7, 18, 9, 0)) is True
+
+    prompt = gateway.prompts[0]
+    assert len(prompt) <= spec.max_prompt_chars
+    # 남은 카드는 머리(날짜·제목)부터 질문까지 온전하다
+    kept = [i for i in ("t1", "t2", "t3", "t4") if f"제목: 제목 {i}\n" in prompt]
+    assert 0 < len(kept) < 4
+    assert prompt.count("- 날짜: ") == len(kept)
+    assert prompt.count("❓ 질문: 질문?") == len(kept)
+    # 빠진 것은 가장 오래된 카드부터다 — 최신(t1)은 남고 최고(t3)는 빠진다
+    assert "t1" in kept
+    assert "t3" not in kept
+    # 남은 카드는 날짜순으로 놓인다
+    dates = [line.split(": ")[1] for line in prompt.splitlines() if line.startswith("- 날짜: ")]
+    assert dates == sorted(dates)
+    assert "오래된" in capsys.readouterr().err
+
+
+def test_weekly_review_skips_when_no_card_fits():
+    client = MockGoogleDocsClient({"theme_a": _theme_record("2026-07-18", "t1", "가" * 2000)})
+    gateway = MockWorkerRunner(response_text="리뷰 본문")
+    spec = WorkerSpec(name="review", model="claude-opus-5-5-high", max_prompt_chars=1500)
+    reviewer = WeeklyReviewer(
+        docs_client=client,
+        runner=gateway,
+        spec=spec,
+        doc_mappings={"반도체사이클": "theme_a"},
+    )
+
+    assert reviewer.generate_weekly_review("review_doc", datetime(2026, 7, 18, 9, 0)) is False
+    assert gateway.calls == 0
+    assert client.read_text("review_doc") == ""

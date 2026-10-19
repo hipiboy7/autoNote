@@ -73,7 +73,10 @@ class WeeklyReviewer:
             return True
 
         # 3. 데이터가 존재하는 경우 AI 요약서 기안 조립
-        # ParsedRecord 리스트를 프롬프트에 주입하기 좋게 텍스트 직렬화
+        # ParsedRecord 리스트를 프롬프트에 주입하기 좋게 텍스트 직렬화.
+        # 레코드는 문서별로 모이므로 날짜순으로 정렬해야 '오래된 카드부터 빼기' 가 성립한다
+        # (안정 정렬이라 같은 날짜 안에서는 문서 순서가 유지된다).
+        recent_records.sort(key=lambda rec: rec.date_str)
         cards_text_list = []
         for rec in recent_records:
             card = (
@@ -88,8 +91,6 @@ class WeeklyReviewer:
             )
             cards_text_list.append(card)
 
-        knowledge_cards_text = "\n".join(cards_text_list)
-
         system_prompt = (
             "너는 전문적인 글로벌 매크로 및 주식 리서치 수석 애널리스트다. "
             "지난 1주일 동안 축적된 리서치 지식 카드와 사용자의 개인 의견(내 생각) 목록이 제공된다. "
@@ -98,9 +99,13 @@ class WeeklyReviewer:
             "전망을 확정적 사실처럼 쓰지 말고, 금융 상품 매수/매도 제안은 절대 포함하지 마라."
         )
 
-        user_prompt = (
+        prompt_head = (
+            f"{system_prompt}\n\n"
             "아래 취합된 최근 1주일간의 리서치 지식 카드를 바탕으로 주간 리뷰 보고서를 작성해라.\n\n"
-            f"[1주일간 축적된 지식 카드 목록]\n{knowledge_cards_text}\n\n"
+            "[1주일간 축적된 지식 카드 목록]\n"
+        )
+        prompt_tail = (
+            "\n\n"
             "[보고서 작성 필수 항목 및 서식]\n"
             "1. 이번 주 핵심 논리 3가지:\n"
             "   (저자는 [근거]를 보고 [논리]로 [판단]했다 한 문장 요약 + 상세 부연)\n"
@@ -114,17 +119,27 @@ class WeeklyReviewer:
 
         # 4. review 워커를 호출하여 주간 요약 텍스트 획득.
         #    실패 시 아무것도 기록하지 않는다 (창작 폴백 금지).
-        prompt = f"{system_prompt}\n\n{user_prompt}"
-        if len(prompt) > self.spec.max_prompt_chars:
-            # 지식 카드가 너무 많으면 최근 항목 위주로 잘라낸다 (프로그램 책임)
-            allowance = self.spec.max_prompt_chars - len(system_prompt) - 1200
-            trimmed = knowledge_cards_text[-max(allowance, 1000):]
-            user_prompt = user_prompt.replace(knowledge_cards_text, trimmed)
-            prompt = f"{system_prompt}\n\n{user_prompt}"
+        #    지식 카드가 너무 많으면 오래된 카드부터 통째로 뺀다 (프로그램 책임).
+        #    글자 수로 자르면 첫 카드의 날짜·제목이 잘려 나가 리뷰가 근거 날짜를
+        #    인용할 수 없다 (2026-10-19 W41 리뷰에서 r1709 가 그렇게 잘렸다).
+        kept = cards_text_list
+        budget = self.spec.max_prompt_chars - len(prompt_head) - len(prompt_tail)
+        while kept and len("\n".join(kept)) > budget:
+            kept = kept[1:]
+        if not kept:
             print(
-                f"[WeeklyReviewer] 지식 카드가 프롬프트 한계를 넘어 최근 {len(trimmed)}자만 사용합니다.",
+                "[WeeklyReviewer] 지식 카드가 1건도 프롬프트 한계에 들어가지 않아 기록하지 않습니다.",
                 file=sys.stderr,
             )
+            return False
+        dropped = len(cards_text_list) - len(kept)
+        if dropped:
+            print(
+                f"[WeeklyReviewer] 지식 카드가 프롬프트 한계를 넘어 오래된 {dropped}건을 빼고 "
+                f"최근 {len(kept)}건({recent_records[dropped].date_str}~)만 사용합니다.",
+                file=sys.stderr,
+            )
+        prompt = prompt_head + "\n".join(kept) + prompt_tail
 
         try:
             result = self.runner.run(self.spec, prompt)
