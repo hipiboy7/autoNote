@@ -114,19 +114,80 @@ def test_tool_error_raises(mock_popen, mcp_dir):
 
 # --------------------------------------------------------------- send_message
 
+def get_me_proc(user_id=424242):
+    return make_proc([
+        rpc(1, {}),
+        rpc(2, {"content": [{"text": json.dumps({"id": user_id, "type": "user"})}]}),
+    ])
+
+
+def tool_name(proc):
+    for line in written(proc).splitlines():
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("method") == "tools/call":
+            return payload["params"]["name"]
+    raise AssertionError("tools/call 요청이 전송되지 않았습니다.")
+
+
 @patch("telegram_client.mcp_client.subprocess.Popen")
-def test_send_message_to_self(mock_popen, mcp_dir):
-    """'me' 는 본인 저장 메시지로, 배치 실패 알림을 폰으로 받는 경로다."""
-    proc = make_proc([rpc(1, {}), rpc(2, {"content": [{"text": "Message sent"}]})])
-    mock_popen.return_value = proc
+def test_send_message_to_self_resolves_me_to_numeric_id(mock_popen, mcp_dir):
+    """'me' 는 본인 저장 메시지로, 배치 실패 알림을 폰으로 받는 경로다.
+
+    MCP 서버의 validate_id 는 숫자 ID 또는 5자 이상 username 만 받는다.
+    'me' 를 그대로 보내면 VALIDATION-001 로 거부되어, 2026-08-06 부터 텔레그램
+    알림이 한 번도 전달되지 않았다. get_me 로 숫자 ID 를 얻어 보내야 한다.
+    """
+    lookup = get_me_proc(424242)
+    send = make_proc([rpc(1, {}), rpc(2, {"content": [{"text": "Message sent"}]})])
+    mock_popen.side_effect = [lookup, send]
 
     ok = MCPTelegramClient(mcp_dir=mcp_dir).send_message("me", "배치 실패 알림")
 
     assert ok is True
-    assert "send_message" in written(proc)
-    args = sent_arguments(proc)
-    assert args["chat_id"] == "me"          # 별칭은 int 변환하지 않는다
+    assert tool_name(lookup) == "get_me"
+    assert tool_name(send) == "send_message"
+    args = sent_arguments(send)
+    assert args["chat_id"] == 424242
     assert args["message"] == "배치 실패 알림"
+
+
+@patch("telegram_client.mcp_client.subprocess.Popen")
+def test_self_id_is_looked_up_once_per_client(mock_popen, mcp_dir):
+    """실패 알림과 배너가 겹쳐도 get_me 는 한 번만 호출한다."""
+    mock_popen.side_effect = [
+        get_me_proc(7),
+        make_proc([rpc(1, {}), rpc(2, {"content": [{"text": "ok"}]})]),
+        make_proc([rpc(1, {}), rpc(2, {"content": [{"text": "ok"}]})]),
+    ]
+    client = MCPTelegramClient(mcp_dir=mcp_dir)
+
+    assert client.send_message("me", "1") is True
+    assert client.send_message("me", "2") is True
+    assert mock_popen.call_count == 3
+
+
+@patch("telegram_client.mcp_client.subprocess.Popen")
+def test_explicit_chat_id_skips_self_lookup(mock_popen, mcp_dir):
+    proc = make_proc([rpc(1, {}), rpc(2, {"content": [{"text": "ok"}]})])
+    mock_popen.return_value = proc
+
+    assert MCPTelegramClient(mcp_dir=mcp_dir).send_message("123456", "본문") is True
+    assert mock_popen.call_count == 1
+    assert sent_arguments(proc)["chat_id"] == 123456
+
+
+@patch("telegram_client.mcp_client.subprocess.Popen")
+def test_send_message_returns_false_when_self_lookup_fails(mock_popen, capsys, mcp_dir):
+    """get_me 실패도 알림 실패일 뿐, 예외로 배치를 중단시키지 않는다."""
+    mock_popen.return_value = make_proc([
+        rpc(1, {}), rpc(2, {"content": [{"text": "Error: not authorized"}]}),
+    ])
+
+    assert MCPTelegramClient(mcp_dir=mcp_dir).send_message("me", "본문") is False
+    assert "send_message 실패" in capsys.readouterr().err
 
 
 @patch("telegram_client.mcp_client.subprocess.Popen")
@@ -142,8 +203,10 @@ def test_send_message_returns_false_on_exception(mock_popen, capsys, mcp_dir):
 
 @patch("telegram_client.mcp_client.subprocess.Popen")
 def test_send_message_detects_failure_in_response(mock_popen, mcp_dir):
-    proc = make_proc([rpc(1, {}), rpc(2, {"content": [{"text": "Error: peer not found"}]})])
-    mock_popen.return_value = proc
+    mock_popen.side_effect = [
+        get_me_proc(),
+        make_proc([rpc(1, {}), rpc(2, {"content": [{"text": "Error: peer not found"}]})]),
+    ]
 
     assert MCPTelegramClient(mcp_dir=mcp_dir).send_message("me", "본문") is False
 
@@ -155,7 +218,7 @@ def test_send_message_rejects_blank_text(mcp_dir):
 @patch("telegram_client.mcp_client.subprocess.Popen")
 def test_parse_mode_is_forwarded_when_given(mock_popen, mcp_dir):
     proc = make_proc([rpc(1, {}), rpc(2, {"content": [{"text": "ok"}]})])
-    mock_popen.return_value = proc
+    mock_popen.side_effect = [get_me_proc(), proc]
 
     MCPTelegramClient(mcp_dir=mcp_dir).send_message("me", "<b>굵게</b>", parse_mode="html")
 

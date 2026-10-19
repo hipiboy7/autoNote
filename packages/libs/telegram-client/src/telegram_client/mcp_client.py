@@ -18,6 +18,9 @@ from .interface import TelegramClient, TelegramMessage
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 DEFAULT_MCP_DIR = str(_REPO_ROOT / "vendor" / "telegram-mcp")
 
+# 본인 저장 메시지(Saved Messages)를 가리키는 별칭. 서버로 보내기 전에 숫자 ID 로 바꾼다.
+SELF_ALIASES = ("me", "self")
+
 
 # ---------------------------------------------------------------- 응답 대기 상한
 # 2026-09-12 배치가 Google Docs MCP 응답을 기다리며 6시간 넘게 멈췄다. readline() 에
@@ -80,8 +83,26 @@ class MCPTelegramClient(TelegramClient):
             self.venv_python = sys.executable
 
         self.main_script = os.path.join(self.mcp_dir, "main.py")
+        self._self_user_id: Optional[int] = None
 
     # ------------------------------------------------------------------ 내부
+
+    def _resolve_self_alias(self, chat_id: Union[int, str]) -> Union[int, str]:
+        """'me' 별칭을 본인 숫자 ID 로 바꾼다 (get_me 1회 조회 후 캐시).
+
+        MCP 서버의 validate_id 는 숫자 ID 또는 5자 이상 username 만 받는다.
+        'me' 를 그대로 보내면 VALIDATION-001 로 거부되어, 2026-08-06 부터
+        텔레그램 알림이 한 번도 전달되지 않았다.
+        """
+        if not (isinstance(chat_id, str) and chat_id.lower() in SELF_ALIASES):
+            return chat_id
+        if self._self_user_id is None:
+            text = self._result_text(self._call_tool("get_me", {}))
+            try:
+                self._self_user_id = int(json.loads(text)["id"])
+            except (ValueError, KeyError, TypeError) as e:
+                raise RuntimeError(f"get_me 응답에서 본인 ID 를 읽지 못했습니다: {text[:200]}") from e
+        return self._self_user_id
 
     @staticmethod
     def _normalize_chat_id(chat_id: Union[int, str]) -> Union[int, str]:
@@ -248,14 +269,14 @@ class MCPTelegramClient(TelegramClient):
         """
         if not text.strip():
             return False
-        arguments: Dict[str, Any] = {
-            "chat_id": self._normalize_chat_id(chat_id),
-            "message": text,
-        }
-        if parse_mode:
-            arguments["parse_mode"] = parse_mode
 
         try:
+            arguments: Dict[str, Any] = {
+                "chat_id": self._resolve_self_alias(self._normalize_chat_id(chat_id)),
+                "message": text,
+            }
+            if parse_mode:
+                arguments["parse_mode"] = parse_mode
             result = self._call_tool("send_message", arguments)
         except Exception as e:
             print(f"[MCPTelegramClient] send_message 실패: {str(e)[:300]}", file=sys.stderr)
