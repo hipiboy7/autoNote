@@ -399,3 +399,28 @@ def test_weekly_review_skips_when_no_card_fits():
     assert reviewer.generate_weekly_review("review_doc", datetime(2026, 7, 18, 9, 0)) is False
     assert gateway.calls == 0
     assert client.read_text("review_doc") == ""
+
+
+def test_parser_reads_identifier_from_field_line_when_header_has_none():
+    rec = WeeklyReviewParser().parse_recent_records(
+        _theme_record("2026-07-18", "t9", "주장"), datetime(2026, 7, 18, 9, 0)
+    )[0]
+    assert rec.identifier == "t9"
+
+
+def test_parser_keeps_empty_thought_empty_and_drops_placeholder():
+    """빈 '내 생각' 줄이 다음 줄(질문)을 삼키지 않고, 미기록 placeholder 는 비운다."""
+    base = _theme_record("2026-07-18", "t1", "주장")
+    empty = base.replace("▶ 💭 내 생각: 메모\n", "▶ 💭 내 생각: \n")
+    placeholder = base.replace("▶ 💭 내 생각: 메모\n", "▶ 💭 내 생각: 미기록 [r1993]\n")
+    parser = WeeklyReviewParser()
+    when = datetime(2026, 7, 18, 9, 0)
+
+    for text in (empty, placeholder):
+        rec = parser.parse_recent_records(text, when)[0]
+        assert rec.my_thought == ""
+        assert rec.critical_question == "질문?"
+        # 리스크 구간도 빈 생각 줄과 무관하게 그대로다
+        assert rec.risks == ["리스크"]
+
+    assert parser.parse_recent_records(base, when)[0].my_thought == "메모"
