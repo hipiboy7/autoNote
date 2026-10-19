@@ -33,7 +33,7 @@ import sys
 import tempfile
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .interface import (
     WorkerResult,
@@ -43,6 +43,8 @@ from .interface import (
 )
 
 DEFAULT_AGY_PATH = r"C:\Users\SYSADMIN\AppData\Local\agy\bin\agy.exe"
+# `agy models` 는 원격 목록을 받아오므로 상한을 둔다
+DEFAULT_MODELS_TIMEOUT_SECONDS = 60
 # 스키마가 이보다 길면 명령행 대신 임시 파일로 전달한다
 SCHEMA_INLINE_LIMIT = 4000
 MAX_ERROR_CHARS = 400
@@ -184,6 +186,39 @@ class AgyCliRunner(WorkerRunner):
             f"[{spec.name}] 워커 실행이 {self.max_attempts}회 모두 실패했습니다. "
             f"마지막 원인: {last_error}. 기록을 건너뜁니다."
         )
+
+    def list_models(self) -> List[str]:
+        """`agy models` 의 'id<TAB>표시명' 줄에서 모델 ID 를 읽는다.
+
+        agy 는 예고 없이 모델 라인업을 교체한다 (2026-08-05, 08-18, 10-13 이후).
+        배치 시작 전에 로스터와 대조하기 위한 목록이다.
+        """
+        timeout = int(os.getenv("AGY_MODELS_TIMEOUT_SECONDS", DEFAULT_MODELS_TIMEOUT_SECONDS))
+        try:
+            proc = subprocess.run(
+                [self.agy_path, "models"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                timeout=timeout,
+                startupinfo=self._startupinfo(),
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise WorkerUnavailableError(f"agy models 실행 실패: {type(e).__name__}: {e}") from e
+
+        if proc.returncode != 0:
+            raise WorkerUnavailableError(
+                f"agy models 실행 실패: {_failure_detail(proc.returncode, proc.stdout, proc.stderr)}"
+            )
+        models = [
+            line.split("\t", 1)[0].strip()
+            for line in (proc.stdout or "").splitlines()
+            if line.strip()
+        ]
+        if not models:
+            raise WorkerUnavailableError("agy models 가 빈 목록을 반환했습니다.")
+        return models
 
     # -------------------------------------------------------------- 내부 구현
 

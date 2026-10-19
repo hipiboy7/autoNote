@@ -8,7 +8,7 @@ Plugins/Hooks/MCP 뿐), 역할별 전문화는 이 조합으로 구현하고 오
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -73,3 +73,10 @@ class WorkerRunner(ABC):
         실패 시 WorkerUnavailableError 를 던진다.
         """
         raise NotImplementedError
+
+    def list_models(self) -> Optional[List[str]]:
+        """현재 실행 가능한 모델 ID 목록. 알 수 없으면 None (사전 점검을 건너뛴다).
+
+        실패 시 WorkerUnavailableError 를 던진다.
+        """
+        return None

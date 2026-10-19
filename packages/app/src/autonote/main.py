@@ -22,7 +22,7 @@ from .notify import AlertContext, BatchNotifier
 from .original_docs import OriginalDocRegistry, parse_monthly_mapping
 from .repair_docs import DocRepairer
 from .restore_docs import DocRestorer
-from .worker_roster import load_roster
+from .worker_roster import load_roster, verify_roster_models
 from writer import local_now
 
 def parse_args():
@@ -511,6 +511,8 @@ def main():
         # 배치 실패를 사용자가 스케줄러 이력을 뒤지지 않고도 알 수 있어야 한다.
         # 실패하면 알린 뒤 예외를 그대로 올려 exit code 1 을 유지한다.
         try:
+            # 모델이 사라졌으면 판별 폴백·리뷰 침묵 실패 전에 여기서 원인과 함께 멈춘다
+            verify_roster_models({**roster, "review": review_spec}, runner)
             run_batch(
                 collector=collector,
                 triage=triage,

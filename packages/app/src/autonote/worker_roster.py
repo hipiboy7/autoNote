@@ -42,6 +42,31 @@ triage 는 실측 우위가 아니라 **사용자 결정으로** 3.7-flash-high 
   * gemini-3.7-flash-high — 56.7s. 근거를 4개씩 원문 문구 그대로 집었고 risks 와
     critical_question 도 채웠다. 근거가 없는 인사말(983)에는 규칙대로 빈 배열을 뒀다.
 
+2026-10-13 무렵 agy 가 모델 라인업을 전면 교체해 위 모델이 모두 사라졌다.
+재실측 (2026-10-19, agy 1.4.2, 실메시지 1900~2003, 운영 ResearchTriage/ResearchAnalyzer
+그대로 — 근거 검증 포함).
+
+triage 워크로드(100건, 6호출):
+
+| 모델                    | 누적 시간 | total  | 리서치 판정 | 판정                    |
+|-------------------------|-----------|--------|-------------|-------------------------|
+| gemini-3.8-flash-high   | 1485s     | 220.5k | 60          | 2.8배 느림 → 미채택     |
+| gemini-3.8-flash-medium | 530s      | 112.9k | 62          | 채택 → triage           |
+
+판정 차이 2건(1905·1965)은 둘 다 경계 사례(짧은 사실 메모·스터디 계획 공지)였고
+나머지 60건은 완전히 일치했다. 08-18 의 "triage=extract 와 같은 모델" 사용자 결정은
+extract 가 flash 계열을 떠나면서 유지하지 않았다 (argon 을 triage 에 쓸 근거 미측정).
+
+extract 워크로드(1900·1902·1903·1904, 1호출, 세 모델 모두 근거 검증 1회 통과):
+
+| 모델                  | 시간   | input | output | total | 판정                              |
+|-----------------------|--------|-------|--------|-------|-----------------------------------|
+| gemini-3.8-flash-high | 255.8s | 73.2k | 17.6k  | 90.8k | 1900·1902 evidence 0개 → 부실     |
+| gemini-4-argon-medium | 100.4s | 22.5k | 3.2k   | 25.7k | 채택 → extract/repair             |
+| gemini-4-argon-high   | 169.6s | 36.4k | 5.3k   | 41.7k | evidence 동일, 느리고 비쌈 → 미채택 |
+
+review: claude-opus-5-5-high 산문 호출 정상(31.8s, 17.5k). 주간리뷰 실데이터로는 미측정.
+
 핵심 제약: 호출 1건당 input 약 20.7k 토큰이 고정 오버헤드다. 따라서 건별 호출을
 피하고 batch_size 만큼 묶어 amortize 한다 (배치 조립은 프로그램 책임).
 """
@@ -50,15 +75,14 @@ import os
 import sys
 from typing import Dict
 
-from agy_gateway import WorkerSpec
+from agy_gateway import WorkerRunner, WorkerSpec, WorkerUnavailableError
 
-# 실측으로 사용 가능성이 확인된 모델 (agy models 출력 기준)
+# 실측으로 사용 가능성이 확인된 모델 (2026-10-19 agy 1.4.2 `agy models` 출력 기준)
 KNOWN_MODELS = (
-    "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low",
-    "gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low",
-    "gemini-3.5-flash-high", "gemini-3.5-flash-medium", "gemini-3.5-flash-low",
-    "gemini-3.1-pro-high", "gemini-3.1-pro-low",
-    "claude-sonnet-4-6", "claude-opus-4-6-thinking",
+    "gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low",
+    "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
+    "claude-opus-5-5-high", "claude-opus-5-5-medium", "claude-opus-5-5-low",
+    "claude-sonnet-5-5-high", "claude-sonnet-5-5-medium", "claude-sonnet-5-5-low",
     "gpt-oss-120b-medium",
 )
 
@@ -74,7 +98,7 @@ DEFAULT_ROSTER: Dict[str, WorkerSpec] = {
     # 리서치 여부 판별 — 출력이 작아 배치를 크게 잡는다
     "triage": WorkerSpec(
         name="triage",
-        model="gemini-3.7-flash-high",
+        model="gemini-3.8-flash-medium",
         batch_size=15,
         timeout_seconds=420,
         max_prompt_chars=11000,
@@ -82,7 +106,7 @@ DEFAULT_ROSTER: Dict[str, WorkerSpec] = {
     # 핵심 논리·근거·리스크 추출 + 테마 분류 — 정확도가 가장 중요
     "extract": WorkerSpec(
         name="extract",
-        model="gemini-3.7-flash-high",
+        model="gemini-4-argon-medium",
         batch_size=4,
         timeout_seconds=600,
         max_prompt_chars=11000,
@@ -90,16 +114,16 @@ DEFAULT_ROSTER: Dict[str, WorkerSpec] = {
     # 주간리뷰 종합·관점 변화 추적 — 주 1회, 품질 최우선
     "review": WorkerSpec(
         name="review",
-        model="claude-opus-4-6-thinking",
+        model="claude-opus-5-5-high",
         batch_size=1,
         timeout_seconds=900,
         max_prompt_chars=24000,
     ),
     # 과거 오염 블록 재생성 — ResearchAnalyzer 를 그대로 쓰므로 extract 와 동일 워크로드다.
-    # 같은 스키마를 다루는 만큼 모델도 extract 와 맞춘다 (2026-08-18 실측 근거).
+    # 같은 스키마를 다루는 만큼 모델도 extract 와 맞춘다 (2026-08-18·10-19 실측 근거).
     "repair": WorkerSpec(
         name="repair",
-        model="gemini-3.7-flash-high",
+        model="gemini-4-argon-medium",
         batch_size=4,
         timeout_seconds=600,
         max_prompt_chars=11000,
@@ -157,3 +181,38 @@ def load_roster() -> Dict[str, WorkerSpec]:
             max_prompt_chars=default.max_prompt_chars,
         )
     return roster
+
+
+class RosterModelError(RuntimeError):
+    """로스터가 지정한 모델을 agy 가 더 이상 제공하지 않는다."""
+
+
+def verify_roster_models(roster: Dict[str, WorkerSpec], runner: WorkerRunner) -> None:
+    """배치 시작 전에 로스터의 모델이 모두 실행 가능한지 확인한다.
+
+    agy 는 예고 없이 모델 라인업을 교체한다. 2026-10-13~19 에는 로스터의 모델이
+    전부 사라졌는데, triage 는 조용히 폴백하고 review 는 stderr 한 줄로 끝나
+    추출 단계에서야 실패가 드러났다. 여기서 한 번에 실패시켜 알림에 원인과
+    대체 후보를 싣는다.
+
+    목록을 얻지 못하면 막지 않는다 (일시적 네트워크 문제로 멀쩡한 배치를 세우지 않는다).
+    그 경우 워커 호출 단계가 실제 오류를 보고한다.
+    """
+    try:
+        available = runner.list_models()
+    except WorkerUnavailableError as e:
+        print(f"[worker_roster] 모델 목록 확인 실패, 사전 점검을 건너뜁니다: {e}",
+              file=sys.stderr)
+        return
+    if available is None:
+        return
+
+    missing = {role: spec.model for role, spec in roster.items() if spec.model not in available}
+    if missing:
+        listed = ", ".join(f"{role}={model}" for role, model in missing.items())
+        raise RosterModelError(
+            f"agy 가 제공하지 않는 모델이 로스터에 있습니다: {listed}. "
+            f"사용 가능: {', '.join(available)}. "
+            "worker_roster.DEFAULT_ROSTER 를 실측 후 갱신하거나, 당장은 "
+            "AGY_WORKER_<ROLE>_MODEL 환경변수로 덮어쓰십시오."
+        )

@@ -59,25 +59,28 @@ agy --model <id> [--effort low|medium|high] --output-format json
 
 ## 3. 워커 로스터
 
-2026-08-05 실측(동일 프롬프트·동일 스키마) 기준 배치. 변경 시 근거를 다시 측정하고 이 표를 갱신할 것.
+2026-10-19 실측(agy 1.4.2, 실메시지 1900~2003, 운영 코드 그대로·근거 검증 포함) 기준 배치. 변경 시 근거를 다시 측정하고 이 표와 `worker_roster.py` docstring 을 갱신할 것. 이전 실측(08-05·08-18)은 docstring 에 남아 있다.
+
+agy 는 예고 없이 모델 라인업을 교체한다(08-05, 08-18, 10-13 무렵). 배치는 시작 전에 `agy models` 로 로스터를 점검하고, 사라진 모델이 있으면 대체 후보를 담아 실패 알림을 보낸다.
 
 | 워커 | 모델 | 배치 | 용도 |
 |---|---|---|---|
-| `triage` | `gemini-3.5-flash-medium` | 15건/호출 | 리서치 여부 판별 |
-| `extract` | `gemini-3.1-pro-high` | 4건/호출 | 핵심 논리·근거·리스크·테마 추출 |
-| `review` | `claude-opus-4-6-thinking` | 1회/주 | 주간리뷰·관점 변화 종합 |
-| `repair` | `gemini-3.5-flash-medium` | 4건/호출 | 과거 오염 블록 재생성 |
+| `triage` | `gemini-3.8-flash-medium` | 15건/호출 | 리서치 여부 판별 |
+| `extract` | `gemini-4-argon-medium` | 4건/호출 | 핵심 논리·근거·리스크·테마 추출 |
+| `review` | `claude-opus-5-5-high` | 1회/주 | 주간리뷰·관점 변화 종합 |
+| `repair` | `gemini-4-argon-medium` | 4건/호출 | 과거 오염 블록 재생성 |
 
-측정값:
+측정값 (triage 는 100건·6호출 누적, extract 는 4건·1호출):
 
-| 모델 | 시간 | input | output | total | 판정 |
-|---|---|---|---|---|---|
-| `gemini-3.1-pro-high` | 22.7s | 21.9k | 1,395 | 23.3k | 정확·최소출력 |
-| `gemini-3.5-flash-medium` | 22.7s | 20.7k | 1,510 | 22.2k | 대량 처리 |
-| `gemini-3.5-flash-low` | 25.0s | 20.7k | 1,851 | 22.5k | medium 보다 느림 → 미채택 |
-| `gemini-3.6-flash-high` | 27.5s | 26.7k | 4,104 | 30.8k | 장황 → 미채택 |
-| `claude-opus-4-6-thinking` | 55.4s | 26.0k | 1,938 | 27.9k | 논리 압축 최고 |
-| `gpt-oss-120b-medium` | 82.0s | 319.7k | 11.5k | 331.2k | **사용 금지** |
+| 모델 | 워크로드 | 시간 | total | 판정 |
+|---|---|---|---|---|
+| `gemini-3.8-flash-medium` | triage | 530s | 112.9k | 채택 (high 와 60/62 일치, 차이 2건은 경계 사례) |
+| `gemini-3.8-flash-high` | triage | 1485s | 220.5k | 2.8배 느림 → 미채택 |
+| `gemini-4-argon-medium` | extract | 100.4s | 25.7k | 채택 — 4건 모두 원문 근거 3~4개 |
+| `gemini-4-argon-high` | extract | 169.6s | 41.7k | 근거 동일, 느리고 비쌈 → 미채택 |
+| `gemini-3.8-flash-high` | extract | 255.8s | 90.8k | 2건 근거 0개 → 부실 |
+| `claude-opus-5-5-high` | review(산문) | 31.8s | 17.5k | 정상 응답. 주간리뷰 실데이터 미측정 |
+| `gpt-oss-120b-medium` | extract (08-05) | 82.0s | 331.2k | **사용 금지** |
 
 `gpt-oss-120b-medium` 금지 사유: 토큰 15배, 테마 오분류, `main_claim` 에 내용 대신 메타서술 생성, 도구로 파일 생성 시도.
 

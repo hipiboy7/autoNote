@@ -36,7 +36,7 @@ class WeeklyReviewer:
     ):
         """주간리뷰는 판단 품질이 가장 중요하므로 로스터에서 최고 추론 워커를 받는다.
 
-        실측 기준 claude-opus-4-6-thinking 이 논리 구조 압축에 가장 정확했다.
+        모델은 worker_roster.DEFAULT_ROSTER["review"] 를 따른다 (2026-10-19 기준 claude-opus-5-5-high).
         """
         self.docs_client = docs_client
         self.runner = runner

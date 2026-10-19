@@ -254,3 +254,54 @@ def test_large_schema_is_passed_as_file(mock_run):
     cmd = mock_run.call_args.args[0]
     schema_arg = cmd[cmd.index("--json-schema") + 1]
     assert schema_arg.endswith(".schema.json")
+
+
+# ------------------------------------------------------------------ list_models
+
+MODELS_STDOUT = (
+    "gemini-4-argon-medium\tGemini 4 Argon (Medium)\n"
+    "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n"
+    "\n"
+    "claude-opus-5-5-high\tClaude Opus 5.5 (High)\n"
+)
+
+
+@patch("agy_gateway.agy_cli.subprocess.run")
+def test_list_models_returns_model_ids(mock_run):
+    """`agy models` 는 'id<TAB>표시명' 줄을 낸다. 안내 문구는 stderr 로 나온다."""
+    mock_run.return_value = MagicMock(
+        returncode=0, stdout=MODELS_STDOUT, stderr="Fetching available models...\n"
+    )
+
+    models = AgyCliRunner(agy_path="agy.exe", usage_log_path="").list_models()
+
+    assert models == ["gemini-4-argon-medium", "gemini-3.8-flash-high", "claude-opus-5-5-high"]
+    assert mock_run.call_args.args[0] == ["agy.exe", "models"]
+
+
+@patch("agy_gateway.agy_cli.subprocess.run")
+def test_list_models_raises_when_cli_fails(mock_run):
+    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="network down")
+
+    with pytest.raises(WorkerUnavailableError):
+        AgyCliRunner(agy_path="agy.exe", usage_log_path="").list_models()
+
+
+@patch("agy_gateway.agy_cli.subprocess.run")
+def test_list_models_raises_on_empty_list(mock_run):
+    """빈 목록을 '모든 모델 없음' 으로 해석하면 멀쩡한 배치를 막는다. 실패로 다룬다."""
+    mock_run.return_value = MagicMock(returncode=0, stdout="\n", stderr="")
+
+    with pytest.raises(WorkerUnavailableError):
+        AgyCliRunner(agy_path="agy.exe", usage_log_path="").list_models()
+
+
+def test_base_runner_does_not_know_models():
+    """목록을 제공하지 못하는 러너(테스트 대역 등)는 None 을 돌려 사전 점검을 건너뛴다."""
+    from agy_gateway.interface import WorkerRunner
+
+    class Dummy(WorkerRunner):
+        def run(self, spec, prompt, schema=None):
+            raise NotImplementedError
+
+    assert Dummy().list_models() is None
