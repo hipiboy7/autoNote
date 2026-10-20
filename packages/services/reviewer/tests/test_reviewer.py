@@ -450,3 +450,34 @@ def test_strip_markdown_removes_quote_and_callout_markers():
         "[!NOTE] 인용 밖 표기는 건드리지 않는다",
     ]
 
+
+
+def test_theme_failure_after_write_counts_as_success():
+    """본문을 기록했으면 테마 실패로 False 를 내지 않는다 (다음 배치가 중복 기록한다)."""
+
+    class ThemeFailingClient(MockGoogleDocsClient):
+        def apply_sepia_theme(self, doc_id: str) -> bool:
+            return False
+
+    client = ThemeFailingClient({
+        "theme_10": _theme_record("2026-07-15", "r305", "주장"),
+        "review_doc": "",
+    })
+    reviewer = WeeklyReviewer(client, MockWorkerRunner(response_text="리뷰 본문"), REVIEW_SPEC, {"반도체사이클": "theme_10"})
+
+    assert reviewer.generate_weekly_review("review_doc", datetime(2026, 7, 18)) is True
+    assert client.read_text("review_doc").count("주간리뷰 성찰 보고서") == 1
+    assert "세피아 테마" in reviewer.last_warning
+    assert reviewer.last_error == ""
+
+
+def test_append_failure_returns_false():
+    class AppendFailingClient(MockGoogleDocsClient):
+        def append_text(self, doc_id: str, text: str) -> bool:
+            return False
+
+    client = AppendFailingClient({"theme_10": _theme_record("2026-07-15", "r305", "주장")})
+    reviewer = WeeklyReviewer(client, MockWorkerRunner(response_text="리뷰 본문"), REVIEW_SPEC, {"반도체사이클": "theme_10"})
+
+    assert reviewer.generate_weekly_review("review_doc", datetime(2026, 7, 18)) is False
+    assert "append 실패" in reviewer.last_error

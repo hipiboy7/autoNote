@@ -55,10 +55,13 @@ class WeeklyReviewer:
         self.parser = WeeklyReviewParser()
         # 직전 generate_weekly_review 가 False 를 낸 이유. 배치가 실패 알림에 싣는다.
         self.last_error = ""
+        # True 를 냈지만 사람이 봐야 할 일 (예: 본문은 기록했는데 테마 적용 실패).
+        self.last_warning = ""
 
     def generate_weekly_review(self, review_doc_id: str, base_date: datetime) -> bool:
         """최근 7일 지식을 수집/파싱하여 주간리뷰를 생성하고 리뷰 구글 Docs에 오버라이트 기록한다."""
         self.last_error = ""
+        self.last_warning = ""
         recent_records = []
 
         # 1. 맵에 지정된 모든 테마/종목 Docs에서 7일 내 데이터 취합
@@ -178,11 +181,17 @@ class WeeklyReviewer:
             f" ({base_date.strftime('%G-W%V')})\n"
             f"{strip_markdown(review_content).strip()}\n"
         )
-        write_ok = self.docs_client.append_text(review_doc_id, review_block)
-        theme_ok = self.docs_client.apply_sepia_theme(review_doc_id)
-        if not write_ok:
+        if not self.docs_client.append_text(review_doc_id, review_block):
             self.last_error = "리뷰 문서에 본문을 기록하지 못했습니다 (Docs append 실패)."
-        elif not theme_ok:
-            self.last_error = "리뷰 본문은 기록했지만 세피아 테마 적용에 실패했습니다."
+            return False
 
-        return write_ok and theme_ok
+        # 본문이 기록됐으면 테마 적용이 실패해도 성공으로 본다. False 를 내면 주차가 기록되지
+        # 않아 다음 배치가 같은 주 리뷰를 한 번 더 붙인다 (중복 블록). 테마는 다음 기록 때
+        # 다시 적용되므로 경고만 남긴다.
+        if not self.docs_client.apply_sepia_theme(review_doc_id):
+            self.last_warning = (
+                "리뷰 본문은 기록했지만 세피아 테마 적용에 실패했습니다. "
+                "다음 기록 때 다시 적용되며, 리뷰는 재생성하지 않습니다."
+            )
+            print(f"[WeeklyReviewer] {self.last_warning}", file=sys.stderr)
+        return True

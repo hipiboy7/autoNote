@@ -447,3 +447,17 @@ def test_use_utf8_console_survives_cp1252_redirect(monkeypatch):
     print("주간리뷰 ✅")
     stream.flush()
     assert buf.getvalue().decode("utf-8").strip() == "주간리뷰 ✅"
+
+
+def test_weekly_review_warning_on_success_records_week_and_notifies(mock_pipeline_services):
+    """테마만 실패한 경우: 주차는 기록해 재생성(중복)을 막고, 경고만 보낸다."""
+    reviewer, state_manager = mock_pipeline_services[5], mock_pipeline_services[6]
+    reviewer.last_warning = "리뷰 본문은 기록했지만 세피아 테마 적용에 실패했습니다."
+    notifier = MagicMock()
+
+    _run_review_only(mock_pipeline_services, notifier)
+
+    state_manager.update_weekly_review_week.assert_called_once_with("2026-W43")
+    kwargs = notifier.notify_warning.call_args.kwargs
+    assert "기록했지만" in kwargs["summary"]
+    assert "세피아" in kwargs["detail"]

@@ -161,20 +161,26 @@ def run_weekly_review_if_due(
     if state.last_weekly_review_week == current_iso_week:
         return False
 
-    def warn(reason: str) -> None:
+    retry_hint = (
+        "이번 주 다음 배치에서 다시 시도합니다. 주가 바뀔 때까지 성공하지 못하면 "
+        "이 주차 리뷰는 자동으로 생성되지 않습니다."
+    )
+
+    def warn(
+        reason: str,
+        summary: str = f"일일 배치는 정상 완료했지만 주간리뷰({current_iso_week}) 생성에 실패했습니다.",
+        hint: str = retry_hint,
+    ) -> None:
         if notifier is None:
             return
         notifier.notify_warning(
-            summary=f"일일 배치는 정상 완료했지만 주간리뷰({current_iso_week}) 생성에 실패했습니다.",
+            summary=summary,
             detail=reason,
             context=AlertContext(
                 mode="batch",
                 when=base_date,
                 last_message_id=state.last_message_id,
-                hint=(
-                    "이번 주 다음 배치에서 다시 시도합니다. 주가 바뀔 때까지 성공하지 못하면 "
-                    "이 주차 리뷰는 자동으로 생성되지 않습니다."
-                ),
+                hint=hint,
             ),
         )
 
@@ -189,6 +195,13 @@ def run_weekly_review_if_due(
     )
     if reviewer.generate_weekly_review(review_doc_id, base_date):
         collector.state_manager.update_weekly_review_week(current_iso_week)
+        warning = getattr(reviewer, "last_warning", "")
+        if isinstance(warning, str) and warning:
+            warn(
+                warning,
+                summary=f"주간리뷰({current_iso_week})는 기록했지만 확인할 일이 있습니다.",
+                hint="",
+            )
         return True
 
     # 실패 시 주차를 기록하지 않아 다음 실행에서 재시도된다
