@@ -383,3 +383,67 @@ def test_success_report_folds_fallback_into_recovery_notice():
 
     notifier.notify_warning.assert_not_called()
     assert "r301" in notifier.notify_recovery.call_args.kwargs["summary"]
+
+
+def _run_review_only(mock_pipeline_services, notifier, doc_mappings=DOC_MAPPINGS):
+    collector, triage, analyzer, writer, merger, reviewer, state_manager = mock_pipeline_services
+    collector.collect_new_messages.return_value = []
+    run_batch(
+        collector=collector,
+        triage=triage,
+        analyzer=analyzer,
+        writer=writer,
+        merger=merger,
+        reviewer=reviewer,
+        thought_doc_id="thought_doc",
+        original_doc_resolver=lambda msg_date: "orig_doc",
+        doc_mappings=doc_mappings,
+        channel_id=CHANNEL,
+        base_date=datetime(2026, 10, 19, 8, 50, 0),
+        notifier=notifier,
+    )
+
+
+def test_weekly_review_failure_sends_warning_with_reason(mock_pipeline_services):
+    """리뷰 실패는 배치를 깨지 않지만 알려야 한다 (W41·W42 가 3주간 조용히 빠졌다)."""
+    reviewer = mock_pipeline_services[5]
+    reviewer.generate_weekly_review.return_value = False
+    reviewer.last_error = "review 워커 실패 (m): timeout"
+    notifier = MagicMock()
+
+    _run_review_only(mock_pipeline_services, notifier)
+
+    kwargs = notifier.notify_warning.call_args.kwargs
+    assert "2026-W43" in kwargs["summary"]
+    assert kwargs["detail"] == "review 워커 실패 (m): timeout"
+    notifier.notify_failure.assert_not_called()
+
+
+def test_weekly_review_success_sends_no_warning(mock_pipeline_services):
+    notifier = MagicMock()
+    _run_review_only(mock_pipeline_services, notifier)
+    notifier.notify_warning.assert_not_called()
+
+
+def test_weekly_review_missing_mapping_sends_warning(mock_pipeline_services):
+    notifier = MagicMock()
+    _run_review_only(
+        mock_pipeline_services, notifier,
+        doc_mappings={k: v for k, v in DOC_MAPPINGS.items() if k != "review"},
+    )
+    assert "REVIEW_DOC_ID" in notifier.notify_warning.call_args.kwargs["detail"]
+
+
+def test_use_utf8_console_survives_cp1252_redirect(monkeypatch):
+    """파일 리다이렉트(cp1252)에서도 한글·이모지 출력으로 죽지 않는다."""
+    import io
+    from autonote.main import use_utf8_console
+
+    buf = io.BytesIO()
+    stream = io.TextIOWrapper(buf, encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stderr", stream)
+    use_utf8_console()
+    print("주간리뷰 ✅")
+    stream.flush()
+    assert buf.getvalue().decode("utf-8").strip() == "주간리뷰 ✅"

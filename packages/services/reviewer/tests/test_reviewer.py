@@ -3,7 +3,7 @@ from datetime import datetime, timezone, timedelta
 from google_docs_client import GoogleDocsClient
 from agy_gateway import WorkerResult, WorkerRunner, WorkerSpec, WorkerUnavailableError
 from reviewer.parser import WeeklyReviewParser, ParsedRecord
-from reviewer.service import WeeklyReviewer
+from reviewer.service import WeeklyReviewer, strip_markdown
 
 class MockGoogleDocsClient(GoogleDocsClient):
     def __init__(self, doc_contents: dict[str, str] = None):
@@ -303,6 +303,7 @@ def test_weekly_reviewer_handles_exceptions_and_parses_edge_cases(capsys):
     assert reviewer_faulty.generate_weekly_review("review_doc", base_date) is False
     captured = capsys.readouterr()
     assert "review 워커 실패" in captured.err
+    assert "review 워커 실패" in reviewer_faulty.last_error
     assert client_normal.read_text("review_doc") == ""
 
 
@@ -323,6 +324,7 @@ def test_weekly_reviewer_returns_false_on_empty_response():
 
     assert reviewer.generate_weekly_review("review_doc", datetime(2026, 7, 18)) is False
     assert client.read_text("review_doc") == ""
+    assert "빈 응답" in reviewer.last_error
 
 
 
@@ -424,3 +426,27 @@ def test_parser_keeps_empty_thought_empty_and_drops_placeholder():
         assert rec.risks == ["리스크"]
 
     assert parser.parse_recent_records(base, when)[0].my_thought == "메모"
+
+
+def test_strip_markdown_removes_quote_and_callout_markers():
+    """W43 리뷰 본문에 `> [!NOTE]` 가 그대로 남았다."""
+    text = "\n".join([
+        "> [!NOTE]",
+        "> 이번 주는 표본이 적다.",
+        ">",
+        "> [!WARNING] 확정 아님",
+        ">> 중첩 인용",
+        "> **굵게**",
+        "본문 > 부등호는 유지",
+        "[!NOTE] 인용 밖 표기는 건드리지 않는다",
+    ])
+    assert strip_markdown(text).split("\n") == [
+        "이번 주는 표본이 적다.",
+        "",
+        "확정 아님",
+        "중첩 인용",
+        "굵게",
+        "본문 > 부등호는 유지",
+        "[!NOTE] 인용 밖 표기는 건드리지 않는다",
+    ]
+

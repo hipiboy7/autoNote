@@ -12,12 +12,22 @@ _MD_HEADING = re.compile(r"^\s{0,3}#{1,6}\s*")
 _MD_BOLD = re.compile(r"\*\*(.+?)\*\*")
 _MD_ITALIC = re.compile(r"(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)")
 _MD_HR = re.compile(r"^\s*([-*_])\1{2,}\s*$")
+# 인용(>, 중첩 >>)과 GitHub 식 콜아웃 표지([!NOTE] 등). W43 리뷰 본문에 그대로 남았다.
+_MD_QUOTE = re.compile(r"^\s{0,3}(?:>\s?)+")
+_MD_CALLOUT = re.compile(r"^\[![A-Za-z]+\][+-]?\s*")
 
 
 def strip_markdown(text: str) -> str:
     """LLM 응답의 마크다운 기호를 제거해 Docs 에 평문으로 기록한다."""
     lines = []
     for line in text.split("\n"):
+        quoted = _MD_QUOTE.match(line)
+        if quoted:
+            line = line[quoted.end():]
+            # 콜아웃 표지만 있는 줄은 버리고, 뒤에 제목이 붙어 있으면 제목만 남긴다
+            line, had_callout = _MD_CALLOUT.subn("", line)
+            if had_callout and not line.strip():
+                continue
         if _MD_HR.match(line):
             continue
         line = _MD_HEADING.sub("", line)
@@ -43,9 +53,12 @@ class WeeklyReviewer:
         self.spec = spec
         self.doc_mappings = doc_mappings
         self.parser = WeeklyReviewParser()
+        # 직전 generate_weekly_review 가 False 를 낸 이유. 배치가 실패 알림에 싣는다.
+        self.last_error = ""
 
     def generate_weekly_review(self, review_doc_id: str, base_date: datetime) -> bool:
         """최근 7일 지식을 수집/파싱하여 주간리뷰를 생성하고 리뷰 구글 Docs에 오버라이트 기록한다."""
+        self.last_error = ""
         recent_records = []
 
         # 1. 맵에 지정된 모든 테마/종목 Docs에서 7일 내 데이터 취합
@@ -127,10 +140,8 @@ class WeeklyReviewer:
         while kept and len("\n".join(kept)) > budget:
             kept = kept[1:]
         if not kept:
-            print(
-                "[WeeklyReviewer] 지식 카드가 1건도 프롬프트 한계에 들어가지 않아 기록하지 않습니다.",
-                file=sys.stderr,
-            )
+            self.last_error = "지식 카드가 1건도 프롬프트 한계에 들어가지 않아 기록하지 않았습니다."
+            print(f"[WeeklyReviewer] {self.last_error}", file=sys.stderr)
             return False
         dropped = len(cards_text_list) - len(kept)
         if dropped:
@@ -149,11 +160,13 @@ class WeeklyReviewer:
                 else result.raw_response
             )
         except WorkerUnavailableError as e:
-            print(f"[WeeklyReviewer] review 워커 실패: {str(e)[:300]}", file=sys.stderr)
+            self.last_error = f"review 워커 실패 ({self.spec.model}): {str(e)[:300]}"
+            print(f"[WeeklyReviewer] {self.last_error}", file=sys.stderr)
             return False
 
         if not (review_content or "").strip():
-            print("[WeeklyReviewer] 빈 리뷰 응답 — 기록하지 않습니다.", file=sys.stderr)
+            self.last_error = f"review 워커({self.spec.model})가 빈 응답을 반환해 기록하지 않았습니다."
+            print(f"[WeeklyReviewer] {self.last_error}", file=sys.stderr)
             return False
 
         # 5. 단일 통합 문서 맨 아래에 누적(append) 기록 후 세피아 배경 테마 인가.
@@ -167,5 +180,9 @@ class WeeklyReviewer:
         )
         write_ok = self.docs_client.append_text(review_doc_id, review_block)
         theme_ok = self.docs_client.apply_sepia_theme(review_doc_id)
+        if not write_ok:
+            self.last_error = "리뷰 문서에 본문을 기록하지 못했습니다 (Docs append 실패)."
+        elif not theme_ok:
+            self.last_error = "리뷰 본문은 기록했지만 세피아 테마 적용에 실패했습니다."
 
         return write_ok and theme_ok

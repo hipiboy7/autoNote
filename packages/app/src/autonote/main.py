@@ -145,20 +145,43 @@ def run_weekly_review_if_due(
     reviewer: WeeklyReviewer,
     doc_mappings: Dict[str, str],
     base_date: datetime,
+    notifier: Optional[BatchNotifier] = None,
 ) -> bool:
     """그 주(ISO Week)의 첫 배치라면 지난주 주간리뷰를 생성한다.
 
     신규 메시지가 없는 날에도 실행되어야 한다. 과거에는 '신규 없음' 조기 반환 뒤에
     리뷰 단계가 놓여 있어, 조용한 월요일에는 주간리뷰가 아예 생성되지 않았다.
+
+    리뷰가 실패해도 배치는 성공으로 끝나므로 따로 주의 알림을 보낸다. 과거에는 stderr 한 줄만
+    남겨 W41·W42 리뷰가 3주 동안 아무도 모르게 빠졌다 (2026-10-19 발견). 주차를 기록하지
+    않으므로 그 주 동안은 매 배치가 재시도하고, 실패할 때마다 알린다.
     """
     current_iso_week = base_date.strftime("%G-W%V")
     state = collector.state_manager.load_state()
     if state.last_weekly_review_week == current_iso_week:
         return False
 
+    def warn(reason: str) -> None:
+        if notifier is None:
+            return
+        notifier.notify_warning(
+            summary=f"일일 배치는 정상 완료했지만 주간리뷰({current_iso_week}) 생성에 실패했습니다.",
+            detail=reason,
+            context=AlertContext(
+                mode="batch",
+                when=base_date,
+                last_message_id=state.last_message_id,
+                hint=(
+                    "이번 주 다음 배치에서 다시 시도합니다. 주가 바뀔 때까지 성공하지 못하면 "
+                    "이 주차 리뷰는 자동으로 생성되지 않습니다."
+                ),
+            ),
+        )
+
     review_doc_id = doc_mappings.get("review")
     if not review_doc_id:
         print("[Batch] 리뷰 문서 매핑이 없어 주간리뷰를 건너뜁니다.", file=sys.stderr)
+        warn("리뷰 문서 매핑(review)이 없습니다. REVIEW_DOC_ID 설정을 확인하십시오.")
         return False
 
     print(
@@ -170,6 +193,7 @@ def run_weekly_review_if_due(
 
     # 실패 시 주차를 기록하지 않아 다음 실행에서 재시도된다
     print("[Batch] 주간리뷰 생성 실패 — 다음 배치에서 재시도합니다.", file=sys.stderr)
+    warn(getattr(reviewer, "last_error", "") or "원인 미상 (배치 로그의 [WeeklyReviewer] 줄 참고)")
     return False
 
 
@@ -184,7 +208,8 @@ def run_batch(
     original_doc_resolver: Callable[[datetime], str],
     doc_mappings: Dict[str, str],
     channel_id: str,
-    base_date: datetime
+    base_date: datetime,
+    notifier: Optional[BatchNotifier] = None,
 ) -> bool:
     """일일 배치 전체 파이프라인 오케스트레이션.
 
@@ -201,7 +226,7 @@ def run_batch(
     new_messages = collector.collect_new_messages(channel_id)
     if not new_messages:
         print("[Batch] No new messages to process.")
-        run_weekly_review_if_due(collector, reviewer, doc_mappings, base_date)
+        run_weekly_review_if_due(collector, reviewer, doc_mappings, base_date, notifier)
         return True
 
     # 3. 리서치 여부 판별 (프로그램 확정 + triage 워커 배치)
@@ -302,7 +327,7 @@ def run_batch(
             raise e
 
     # 7. 그 주(ISO Week) 첫 배치라면 지난주 주간리뷰 생성
-    run_weekly_review_if_due(collector, reviewer, doc_mappings, base_date)
+    run_weekly_review_if_due(collector, reviewer, doc_mappings, base_date, notifier)
 
     # 8. 전체 성공 시 상태 최종 업데이트
     if last_success_id:
@@ -405,7 +430,24 @@ def verify_theme_mappings(doc_mappings: Dict[str, str]) -> None:
         sys.exit(1)
 
 
+def use_utf8_console() -> None:
+    """콘솔·리다이렉트 출력을 UTF-8 로 맞춘다.
+
+    Windows 에서 stdout 을 파일로 돌리면 cp1252 가 되어 한글·이모지 print 에서
+    UnicodeEncodeError 로 죽는다. 2026-10-19 수동 배치가 잠금 직후 이렇게 죽었다.
+    bat 스크립트는 PYTHONIOENCODING 을 지정하지만 직접 실행할 때는 보호가 없다.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
 def main():
+    use_utf8_console()
     args = parse_args()
 
     # 구글 Docs 매핑 정보 및 파일 상태 경로 설정
@@ -524,7 +566,8 @@ def main():
                 original_doc_resolver=original_doc_registry.resolve,
                 doc_mappings=doc_mappings,
                 channel_id=args.channel,
-                base_date=now
+                base_date=now,
+                notifier=notifier,
             )
         except BaseException as e:
             state = state_manager.load_state()
@@ -556,7 +599,9 @@ def main():
     elif args.mode == "review":
         print("Running manual Weekly Review mode...")
         review_doc_id = doc_mappings.get("review")
-        reviewer.generate_weekly_review(review_doc_id, now)
+        if not reviewer.generate_weekly_review(review_doc_id, now):
+            print(f"Manual Weekly Review failed: {reviewer.last_error}", file=sys.stderr)
+            sys.exit(1)
         print("Manual Weekly Review completed.")
     elif args.mode == "backfill":
         if args.from_id is None or args.to_id is None:
