@@ -129,3 +129,84 @@ def test_program_filter_only_rejects_certain_cases(temp_state_file):
     # 5. 코멘트 동반 링크글 -> 프로그램이 버리지 않는다
     with_comment = msg("전쟁 장기화가 쉽지 않은 상황.\nhttps://m.blog.naver.com/x")
     assert collector.obvious_skip_reason(with_comment) is None
+
+
+class LimitedTelegramClient(TelegramClient):
+    """실서버처럼 최신 글부터 limit 건만 돌려준다."""
+
+    def __init__(self, ids):
+        self.ids = sorted(ids, reverse=True)
+        self.limits = []
+
+    def list_messages(self, channel_id: str, limit: int = 100) -> list[TelegramMessage]:
+        self.limits.append(limit)
+        return [
+            TelegramMessage(id=i, channel_id=channel_id, text=f"글 {i}", date=datetime.now(timezone.utc))
+            for i in self.ids[:limit]
+        ]
+
+
+def _collector_after(temp_state_file, last_id, client, **kwargs):
+    state_manager = StateManager(temp_state_file)
+    state_manager.update_channel_state("c", last_id)
+    return MessageCollector(client, state_manager, **kwargs)
+
+
+def test_collector_refetches_until_backlog_reaches_last_id(temp_state_file):
+    """밀린 글이 200건을 넘어도 오래된 글을 놓치지 않는다."""
+    client = LimitedTelegramClient(range(1, 1001))  # 1~1000
+    collector = _collector_after(temp_state_file, 500, client)
+
+    collected = collector.collect_new_messages("c")
+
+    assert [m.id for m in collected] == list(range(501, 1001))
+    assert client.limits == [200, 400, 800]
+
+
+def test_collector_single_fetch_when_backlog_is_small(temp_state_file):
+    client = LimitedTelegramClient(range(1, 1001))
+    collector = _collector_after(temp_state_file, 950, client)
+
+    assert len(collector.collect_new_messages("c")) == 50
+    assert client.limits == [200]
+
+
+def test_collector_stops_when_channel_is_exhausted(temp_state_file):
+    """채널 글이 limit 보다 적으면 더 늘리지 않는다 (경계 글이 지워진 경우 포함)."""
+    client = LimitedTelegramClient(range(300, 450))
+    collector = _collector_after(temp_state_file, 100, client)
+
+    assert len(collector.collect_new_messages("c")) == 150
+    assert client.limits == [200]
+
+
+def test_collector_raises_instead_of_skipping_gap(temp_state_file):
+    """상한까지 늘려도 닿지 않으면 state 를 넘기지 않도록 멈춘다."""
+    from collector import CollectionGapError
+
+    client = LimitedTelegramClient(range(1, 2001))
+    collector = _collector_after(temp_state_file, 100, client, max_limit=800)
+
+    with pytest.raises(CollectionGapError, match="101~1200"):
+        collector.collect_new_messages("c")
+    assert client.limits == [200, 400, 800]
+    assert StateManager(temp_state_file).load_state().channels["c"].last_message_id == 100
+
+
+def test_collect_message_range_reaches_old_from_id(temp_state_file):
+    client = LimitedTelegramClient(range(1, 2001))
+    collector = _collector_after(temp_state_file, 2000, client)
+
+    got = collector.collect_message_range("c", 1000, 1010)
+
+    assert [m.id for m in got] == list(range(1000, 1011))
+    assert client.limits == [500, 1000, 2000]
+
+
+def test_fetch_max_limit_env(monkeypatch):
+    from collector.service import fetch_max_limit
+
+    monkeypatch.setenv("TELEGRAM_FETCH_MAX_LIMIT", "")
+    assert fetch_max_limit() == 3200
+    monkeypatch.setenv("TELEGRAM_FETCH_MAX_LIMIT", "10000")
+    assert fetch_max_limit() == 10000

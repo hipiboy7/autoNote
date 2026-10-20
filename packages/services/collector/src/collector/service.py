@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -133,10 +134,66 @@ class StateManager:
         self.save_state(state)
         return previous
 
+# 한 번에 가져오는 최신 글 수와 늘려 가며 다시 가져올 때의 상한.
+# 하루 15건 안팎이라 3200건이면 반년치다. 넘으면 TELEGRAM_FETCH_MAX_LIMIT 로 올린다.
+FETCH_INITIAL_LIMIT = 200
+FETCH_MAX_LIMIT = 3200
+
+
+def fetch_max_limit() -> int:
+    try:
+        return max(FETCH_INITIAL_LIMIT, int(os.getenv("TELEGRAM_FETCH_MAX_LIMIT", FETCH_MAX_LIMIT)))
+    except ValueError:
+        return FETCH_MAX_LIMIT
+
+
+class CollectionGapError(RuntimeError):
+    """마지막 처리 ID 까지 거슬러 올라가지 못해 중간 글을 놓칠 수 있을 때."""
+
+
 class MessageCollector:
-    def __init__(self, client: TelegramClient, state_manager: StateManager):
+    def __init__(
+        self,
+        client: TelegramClient,
+        state_manager: StateManager,
+        initial_limit: int = FETCH_INITIAL_LIMIT,
+        max_limit: Optional[int] = None,
+    ):
         self.client = client
         self.state_manager = state_manager
+        self.initial_limit = initial_limit
+        self.max_limit = max_limit if max_limit is not None else fetch_max_limit()
+
+    def _fetch_back_to(self, channel_id: str, boundary_id: int, initial_limit: int) -> List[TelegramMessage]:
+        """boundary_id 보다 큰 글이 **빠짐없이** 들어올 때까지 limit 을 늘려 가져온다.
+
+        list_messages 는 최신 글부터 limit 건만 준다 (MCP 도구에 ID 기준 페이지 인자가 없다).
+        예전에는 limit=200 한 번으로 끝내, 밀린 글이 200건을 넘으면 그보다 오래된 글을
+        조용히 건너뛰고 state 가 최신 ID 로 넘어가 영영 수집되지 않았다.
+
+        다 가져왔다고 보는 경우는 둘이다.
+          * 결과에 boundary_id 이하인 글이 있다 → 경계까지 겹쳐 읽었다
+          * 결과가 limit 보다 적다            → 채널 끝까지 읽었다
+        상한까지 늘려도 어느 쪽도 아니면 CollectionGapError 로 멈춘다 (배치 실패 알림으로 간다).
+        """
+        limit = initial_limit
+        while True:
+            raw = self.client.list_messages(channel_id, limit=limit)
+            if len(raw) < limit or any(m.id <= boundary_id for m in raw):
+                return raw
+            if limit >= self.max_limit:
+                oldest = min(m.id for m in raw)
+                raise CollectionGapError(
+                    f"최신 {len(raw)}건을 가져와도 마지막 처리 ID {boundary_id} 에 닿지 않습니다 "
+                    f"(가장 오래된 수집 ID {oldest}). 그대로 진행하면 {boundary_id + 1}~{oldest - 1} "
+                    "구간을 놓칩니다. 백필도 같은 최신 N건 조회를 쓰므로 메울 수 없습니다 — "
+                    f"TELEGRAM_FETCH_MAX_LIMIT 를 {self.max_limit} 보다 크게 지정해 다시 실행하십시오."
+                )
+            limit = min(limit * 2, self.max_limit)
+            print(
+                f"[Collector] 마지막 처리 ID {boundary_id} 까지 닿지 않아 limit={limit} 로 다시 가져옵니다.",
+                file=sys.stderr,
+            )
 
     def collect_new_messages(self, channel_id: str) -> List[TelegramMessage]:
         state = self.state_manager.load_state()
@@ -147,8 +204,12 @@ class MessageCollector:
         else:
             target_last_id = state.last_message_id
 
-        # 1. 텔레그램 채널에서 메시지 리스트 획득
-        raw_messages = self.client.list_messages(channel_id, limit=200)
+        # 1. 텔레그램 채널에서 마지막 처리 ID 이후 글을 빠짐없이 획득.
+        #    state 가 없던 첫 실행(0)은 경계가 없으므로 최신 글만 가져온다 (기존 동작).
+        if target_last_id > 0:
+            raw_messages = self._fetch_back_to(channel_id, target_last_id, self.initial_limit)
+        else:
+            raw_messages = self.client.list_messages(channel_id, limit=self.initial_limit)
 
         # 2. 미수집 신규 메시지 수집 (필터링 없이 100% 수집)
         new_messages = [msg for msg in raw_messages if msg.id > target_last_id]
@@ -161,7 +222,7 @@ class MessageCollector:
 
     def collect_message_range(self, channel_id: str, from_id: int, to_id: int) -> List[TelegramMessage]:
         """특정 메시지 ID 범위의 메시지를 수집한다 (백필용). state.json을 참조하지 않는다."""
-        raw_messages = self.client.list_messages(channel_id, limit=500)
+        raw_messages = self._fetch_back_to(channel_id, from_id - 1, 500)
         range_messages = [msg for msg in raw_messages if from_id <= msg.id <= to_id]
         range_messages.sort(key=lambda x: x.id)
         print(f"Backfill collection for {channel_id}: Collected={len(range_messages)} messages in range [{from_id}, {to_id}].")
